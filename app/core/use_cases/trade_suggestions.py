@@ -15,3 +15,11 @@ class TradeSuggestions:
             max_risk=stock.price * 0.05,
             max_reward=stock.price * 0.1
         ) for stock in stocks]
+class TradeSuggestions:
+    def __init__(self, stock_repository):
+        self.stock_repository = stock_repository
+
+    def generate_suggestions(self):
+        stocks = self.stock_repository.get_all_stocks()
+        # Implement logic to generate trade suggestions
+        return stocks

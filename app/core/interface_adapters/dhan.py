@@ -136,3 +136,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+import requests
+
+class DhanAPI:
+    def __init__(self, api_key):
+        self.api_key = api_key
+
+    def fetch_stock_data(self, symbol):
+        # Implement API call to fetch stock data
+        response = requests.get(f"https://api.dhan.com/stocks/{symbol}", headers={"Authorization": f"Bearer {self.api_key}"})
+        return response.json()

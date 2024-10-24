@@ -9,3 +9,15 @@ def get_mongo_client():
 def get_database(db_name):
     client = get_mongo_client()
     return client[db_name]
+from pymongo import MongoClient
+
+class MongoDBClient:
+    def __init__(self, uri):
+        self.client = MongoClient(uri)
+        self.db = self.client['stock_database']
+
+    def insert_stock_data(self, stock_data):
+        self.db.stocks.insert_one(stock_data)
+
+    def get_all_stocks(self):
+        return list(self.db.stocks.find())
