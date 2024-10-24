@@ -37,6 +37,14 @@ The application is organized into the following layers:
 
 ## Usage
 
+### Starting Services
+
+To start all services, use the provided shell script:
+
+```bash
+./start_services.sh
+```
+
 Access the API at `http://localhost:8000/trade-suggestions` to get trade suggestions.
 
 ## Testing
