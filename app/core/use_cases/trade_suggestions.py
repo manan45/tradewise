@@ -1,20 +1,21 @@
-from app.core.domain.entities import Stock, TradeSuggestion
+from app.core.domain.entities import Stock, DetailedTradeSuggestion
+from app.utils.ai_model import generate_trade_suggestions
+import pandas as pd
 
 class TradeSuggestions:
     def __init__(self, stock_repository):
         self.stock_repository = stock_repository
 
-    def get_suggestions(self):
+    def generate_suggestions(self):
         stocks = self.stock_repository.get_all_stocks()
-        return [TradeSuggestion(
-            action="SELL" if stock.price > 100 else "BUY",
-            price=stock.price,
-            confidence=0.5,  # Placeholder for actual logic
-            stop_loss=stock.price * 0.95,
-            order_limit=stock.price * 1.05,
-            max_risk=stock.price * 0.05,
-            max_reward=stock.price * 0.1
-        ) for stock in stocks]
+        stock_data = self._prepare_stock_data(stocks)
+        suggestions = generate_trade_suggestions(stock_data)
+        return suggestions
+
+    def _prepare_stock_data(self, stocks):
+        # Convert stocks to a DataFrame or suitable format for the AI model
+        data = [{'symbol': stock.symbol, 'close': stock.price} for stock in stocks]
+        return pd.DataFrame(data)
 class TradeSuggestions:
     def __init__(self, stock_repository):
         self.stock_repository = stock_repository
