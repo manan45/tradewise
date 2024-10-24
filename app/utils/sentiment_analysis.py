@@ -10,3 +10,13 @@ def analyze_sentiment(news_articles):
     sentiment_pipeline = pipeline("sentiment-analysis")
     sentiments = [sentiment_pipeline(article)[0] for article in news_articles]
     return sentiments
+
+def get_sentiment_scores(data):
+    """
+    Get sentiment scores for a DataFrame containing news articles.
+
+    :param data: DataFrame with a 'news' column.
+    :return: DataFrame with an additional 'sentiment_score' column.
+    """
+    data['sentiment_score'] = analyze_sentiment(data['news'])
+    return data
