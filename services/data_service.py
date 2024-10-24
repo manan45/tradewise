@@ -1,23 +1,16 @@
 from flask import Flask, request, jsonify
 import threading
-from airflow import DAG
-from airflow.operators.python_operator import PythonOperator
-from datetime import datetime
+from app.core.interface_adapters.dhan import fetch_and_store_stock_data
 
 app = Flask(__name__)
 
-def process_data(data):
-    # Implement data processing logic here
-    pass
-
-def data_pipeline():
-    # Define your data pipeline logic here
-    pass
 
 @app.route('/data', methods=['POST'])
 def handle_data():
     data = request.json
-    threading.Thread(target=process_data, args=(data,)).start()
+    symbol = data.get('symbol')
+    interval = data.get('interval')
+    threading.Thread(target=fetch_and_store_stock_data, args=(symbol, interval)).start()
     return jsonify({"status": "success"}), 200
 
 # Define an Airflow DAG for the data pipeline

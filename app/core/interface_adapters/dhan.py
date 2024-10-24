@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from dhanhq import dhanhq
 from tenacity import retry, wait_fixed, stop_after_attempt
+from app.mongodb_client import MongoDBClient
 
 # Initialize the DhanHQ client
 client = dhanhq(
@@ -87,6 +88,9 @@ def fetch_stock_data(symbol, interval):
         print(f"Invalid interval: {interval}")
         return None
     
+    if df is not None:
+        mongo_client = MongoDBClient(uri="mongodb://mongo:27017")
+        mongo_client.insert_stock_data(df.to_dict())
     return df.dropna()
 
 def fetch_all_intervals(symbol):

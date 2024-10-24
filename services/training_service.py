@@ -1,23 +1,18 @@
 from flask import Flask, request, jsonify
 import threading
-from airflow import DAG
-from airflow.operators.python_operator import PythonOperator
-from datetime import datetime
+from app.mongodb_client import MongoDBClient
 
 app = Flask(__name__)
 
-def train_model_logic(data):
-    # Implement model training logic here
-    pass
-
-def training_pipeline():
-    # Define your training pipeline logic here
-    pass
+def train_model_logic():
+    mongo_client = MongoDBClient(uri="mongodb://mongo:27017")
+    stock_data = mongo_client.get_all_stocks()
+    # Implement model training logic here using stock_data
+    # Store results back in MongoDB if needed
 
 @app.route('/train', methods=['POST'])
 def train_model():
-    data = request.json
-    threading.Thread(target=train_model_logic, args=(data,)).start()
+    threading.Thread(target=train_model_logic).start()
     return jsonify({"status": "training started"}), 200
 
 # Define an Airflow DAG for the training pipeline
