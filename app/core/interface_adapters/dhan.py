@@ -1,6 +1,7 @@
 import time
 import asyncio
 import websockets
+import threading
 from datetime import datetime, timedelta
 import pandas as pd
 from dhanhq import dhanhq
@@ -123,6 +124,9 @@ def fetch_weekly_data(symbol):
     except Exception as e:
         print(f"Error fetching weekly data for {symbol}: {str(e)}")
         return None
+
+def start_real_time_data_fetching():
+    threading.Thread(target=asyncio.run, args=(main(),)).start()
 
 async def main():
     uri = "ws://localhost:8000/ws"

@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket
+import asyncio
 from app.core.utils.hello import hello
 from app.core.use_cases.trade_suggestions import TradeSuggestions
 from app.core.interface_adapters.dhan import DhanAPI
@@ -19,5 +20,12 @@ async def websocket_endpoint(websocket: WebSocket):
         data = await websocket.receive_text()
         # Process incoming data and send response
         await websocket.send_text(f"Received: {data}")
-    import uvicorn
-    uvicorn.run(app, host='0.0.0.0', port=8000)
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(fetch_real_time_data())
+
+async def fetch_real_time_data():
+    while True:
+        # Simulate fetching real-time data
+        await asyncio.sleep(5)  # Fetch data every 5 seconds
+        print("Fetching real-time data...")
