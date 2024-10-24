@@ -35,6 +35,14 @@ The application is organized into the following layers:
    uvicorn app.api.main:app --reload
    ```
 
+## API Documentation
+
+The API is documented using OpenAPI standards. You can access the API documentation by visiting `http://localhost:8000/docs` after starting the server.
+
+## UI Dashboard
+
+A UI dashboard is available to view the forecast vs actual tracking. Access it by visiting `http://localhost:8080` after starting the services.
+
 ## Usage
 
 ### Starting Services

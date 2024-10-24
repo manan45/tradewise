@@ -50,6 +50,13 @@ services:
     ports:
       - "2181:2181"
 
+  dashboard:
+    image: nginx:latest
+    ports:
+      - "8080:80"
+    volumes:
+      - ./app/ui:/usr/share/nginx/html:ro
+
 volumes:
   mongo_data:
   postgres_data:
