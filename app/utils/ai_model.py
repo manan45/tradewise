@@ -22,6 +22,10 @@ def create_env():
 def train_agent():
     config = ppo.DEFAULT_CONFIG.copy()
     config["num_workers"] = 1
+    config["framework"] = "torch"  # Use PyTorch for better performance
+    config["train_batch_size"] = 4000
+    config["sgd_minibatch_size"] = 128
+    config["num_sgd_iter"] = 30
     trainer = ppo.PPOTrainer(config=config, env=create_env)
     for i in range(10):
         result = trainer.train()
