@@ -80,5 +80,12 @@ class DhanAPI:
         self.api_key = api_key
 
     def fetch_stock_data(self, symbol):
-        response = requests.get(f"https://api.dhan.com/stocks/{symbol}", headers={"Authorization": f"Bearer {self.api_key}"})
-        return response.json()
+        # Simulate fetching data from Dhan API
+        return {
+            "symbol": symbol,
+            "channels": {
+                "RSI": 70.5,
+                "Moving Average": 150.3,
+                "Forecast": 155.0
+            }
+        }
