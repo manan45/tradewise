@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from app.core.utils.hello import hello
 from app.core.use_cases.trade_suggestions import TradeSuggestions
 from app.core.interface_adapters.dhan import DhanAPI
 
