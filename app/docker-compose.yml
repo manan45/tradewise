@@ -2,31 +2,27 @@ version: '3.8'
 
 services:
   data_service:
-    deploy:
-      replicas: 3
-    deploy:
-      replicas: 3
     build:
       context: .
-      dockerfile: app/Dockerfile
+      dockerfile: Dockerfile
     ports:
       - "5001:5001"
     environment:
       - MONGO_URI=mongodb://mongo:27017
+    depends_on:
+      - mongo
 
   training_service:
     build:
       context: .
-      dockerfile: app/Dockerfile
+      dockerfile: Dockerfile
     ports:
       - "5002:5002"
     environment:
       - MONGO_URI=mongodb://mongo:27017
+    depends_on:
+      - mongo
 
-volumes:
-  mongo_data:
-version: '3.8'
-services:
   mongo:
     image: mongo:latest
     container_name: mongo
@@ -34,13 +30,6 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-
-  app:
-    build: .
-    depends_on:
-      - mongo
-    environment:
-      MONGO_URI: mongodb://mongo:27017
 
 volumes:
   mongo_data:
