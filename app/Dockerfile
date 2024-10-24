@@ -9,7 +9,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
 COPY app/ .
-COPY data/ ./data/
+COPY app/data/ ./data/
+COPY app/utils/ ./utils/
+COPY app/core/ ./core/
+COPY app/services/ ./services/
+COPY app/queue/ ./queue/
 
 # Final stage
 FROM python:3.9-slim
