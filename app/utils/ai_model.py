@@ -9,28 +9,24 @@ from sklearn.ensemble import RandomForestRegressor
 from ta.trend import MACD
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
-import pandas as pd
-import numpy as np
-from keras.models import Sequential
-from keras.layers import Dense, LSTM
-from sklearn.preprocessing import MinMaxScaler
-from prophet import Prophet
-from app.core.domain.models import DetailedTradeSuggestion
-from sklearn.ensemble import RandomForestRegressor
-from ta.trend import MACD
-from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
-import pandas as pd
-import numpy as np
-from keras.models import Sequential
-from keras.layers import Dense, LSTM
-from sklearn.preprocessing import MinMaxScaler
-from prophet import Prophet
-from models import DetailedTradeSuggestion
-from sklearn.ensemble import RandomForestRegressor
-from ta.trend import MACD
-from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
+import gym
+import ray
+from ray.rllib.agents import ppo
+
+ray.init(ignore_reinit_error=True)
+
+def create_env():
+    # Define a custom environment or use an existing one
+    return gym.make('CartPole-v1')
+
+def train_agent():
+    config = ppo.DEFAULT_CONFIG.copy()
+    config["num_workers"] = 1
+    trainer = ppo.PPOTrainer(config=config, env=create_env)
+    for i in range(10):
+        result = trainer.train()
+        print(f"Iteration {i}: reward = {result['episode_reward_mean']}")
+    trainer.save("/tmp/ppo_agent")
 
 
 

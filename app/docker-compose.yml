@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  data_service:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+
+  training_service:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    ports:
+      - "5002:5002"
+
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  mongo_data:

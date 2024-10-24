@@ -1,11 +1,12 @@
 import pika
 
-connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
-channel = connection.channel()
-
-channel.queue_declare(queue='task_queue', durable=True)
+def create_connection():
+    return pika.BlockingConnection(pika.ConnectionParameters('localhost'))
 
 def send_message(message):
+    connection = create_connection()
+    channel = connection.channel()
+    channel.queue_declare(queue='task_queue', durable=True)
     channel.basic_publish(exchange='',
                           routing_key='task_queue',
                           body=message,
@@ -13,6 +14,7 @@ def send_message(message):
                              delivery_mode=2,  # make message persistent
                           ))
     print(f"Sent {message}")
+    connection.close()
 
-send_message('Hello World!')
-connection.close()
+if __name__ == "__main__":
+    send_message('Hello World!')
