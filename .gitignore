@@ -1,6 +1,6 @@
 .aider*
 .env
-
+.venv
 # Temporary files
 *.tmp
 *.swp
