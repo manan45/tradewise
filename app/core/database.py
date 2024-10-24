@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from app.core.entities.entities import Base
+from app.core.entities.entities import Base, Stock, ChannelData
 
 engine = create_engine('postgresql://user:password@localhost/mydatabase')
 Session = sessionmaker(bind=engine)
