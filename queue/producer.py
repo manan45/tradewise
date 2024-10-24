@@ -1,7 +1,13 @@
 import pika
+import time
 
 def create_connection():
-    return pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+    while True:
+        try:
+            return pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+        except pika.exceptions.AMQPConnectionError:
+            print("Connection failed, retrying in 5 seconds...")
+            time.sleep(5)
 
 def send_message(message):
     connection = create_connection()
