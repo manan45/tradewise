@@ -1,4 +1,5 @@
-import time
+import asyncio
+import websockets
 from datetime import datetime, timedelta
 import pandas as pd
 from dhanhq import dhanhq
@@ -122,7 +123,15 @@ def fetch_weekly_data(symbol):
         print(f"Error fetching weekly data for {symbol}: {str(e)}")
         return None
 
-def main():
+async def main():
+    uri = "ws://localhost:8000/ws"
+    async with websockets.connect(uri) as websocket:
+        while True:
+            # Simulate fetching data
+            symbol = "RELIANCE"
+            stock_data = fetch_all_intervals(symbol)
+            await websocket.send(f"Data for {symbol}: {stock_data}")
+            await asyncio.sleep(5)  # Simulate real-time interval
     # Fetch user's trade history
     # trade_history = fetch_user_trade_history()
     # if trade_history is not None:

@@ -7,6 +7,14 @@ app = Flask(__name__)
 def train_model_logic():
     mongo_client = MongoDBClient(uri="mongodb://mongo:27017")
     stock_data = mongo_client.get_all_stocks()
+    # Example: Implement a simple moving average model
+    for stock in stock_data:
+        prices = stock['close']
+        moving_average = sum(prices[-5:]) / 5  # Simple 5-day moving average
+        print(f"Moving Average for {stock['symbol']}: {moving_average}")
+    # Store results back in MongoDB if needed
+    mongo_client = MongoDBClient(uri="mongodb://mongo:27017")
+    stock_data = mongo_client.get_all_stocks()
     # Implement model training logic here using stock_data
     # Store results back in MongoDB if needed
 

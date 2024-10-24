@@ -12,6 +12,11 @@ def handle_data():
     interval = data.get('interval')
     threading.Thread(target=fetch_and_store_stock_data, args=(symbol, interval)).start()
     return jsonify({"status": "success"}), 200
+    data = request.json
+    symbol = data.get('symbol')
+    interval = data.get('interval')
+    threading.Thread(target=fetch_and_store_stock_data, args=(symbol, interval)).start()
+    return jsonify({"status": "success"}), 200
 
 
 if __name__ == '__main__':
