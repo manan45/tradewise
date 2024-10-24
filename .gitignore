@@ -23,9 +23,21 @@ env/
 # Logs
 *.log
 
-# OS generated files
-.DS_Store
-Thumbs.db
+# Docker
+Dockerfile
+docker-compose.yml
+*.dockerignore
+
+# Kubernetes
+*.yaml
+*.yml
+
+# Terraform
+*.tfstate
+*.tfstate.*
+
+# Helm
+charts/
 
 # Node.js
 node_modules/
