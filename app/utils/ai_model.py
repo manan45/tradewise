@@ -4,6 +4,7 @@ from keras.models import Sequential
 from keras.layers import Dense, LSTM
 from sklearn.preprocessing import MinMaxScaler
 from prophet import Prophet
+from app.utils.forecasting import lstm_forecast, forecast_timeseries
 from app.core.domain.models import DetailedTradeSuggestion
 from sklearn.ensemble import RandomForestRegressor
 from ta.trend import MACD
@@ -35,7 +36,12 @@ def train_agent():
 
 
 def generate_trade_suggestions(data: pd.DataFrame) -> list:
-    # Ensure the DataFrame has a proper index
+    # Add additional parameters
+    data['volume_change'] = data['volume'].pct_change()
+    data['price_change'] = data['close'].pct_change()
+    data['day_of_week'] = data['date'].dt.dayofweek
+    data['is_month_end'] = data['date'].dt.is_month_end
+    # Add more parameters as needed
     data = data.reset_index(drop=True)
 
     # Check if the DataFrame is empty
@@ -43,7 +49,7 @@ def generate_trade_suggestions(data: pd.DataFrame) -> list:
         print("Error: Input DataFrame is empty.")
         return []
 
-    # Feature engineering
+    # Feature engineering with additional parameters
     data['returns'] = data['close'].pct_change()
     data['ema_9'] = data['close'].ewm(span=9, adjust=False).mean()
     data['ema_12'] = data['close'].ewm(span=12, adjust=False).mean()
@@ -64,7 +70,10 @@ def generate_trade_suggestions(data: pd.DataFrame) -> list:
     data['upper_band'] = bb.bollinger_hband()
     data['lower_band'] = bb.bollinger_lband()
     
-    # Moving Averages
+    # Combine LSTM and Prophet predictions
+    lstm_predictions = lstm_forecast(data[['date', 'close']])
+    prophet_predictions = forecast_timeseries(data[['date', 'close']])
+    combined_predictions = (lstm_predictions + prophet_predictions['yhat'].values) / 2
     data['sma_50'] = data['close'].rolling(window=50).mean()
     data['sma_200'] = data['close'].rolling(window=200).mean()
     
