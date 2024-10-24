@@ -1,2 +1,40 @@
 .aider*
 .env
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# Compiled source
+*.class
+*.o
+*.so
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+env/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Node.js
+node_modules/
+
+# Java
+*.jar
+*.war
+*.ear
+
+# Build directories
+build/
+dist/
