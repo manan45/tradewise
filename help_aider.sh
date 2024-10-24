@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 # Aider Helper Script
 
 # Function to display help
