@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 # Aider Helper Script
 
 # Function to display help
@@ -126,4 +125,8 @@ case "$1" in
     help|*)
         show_help
         ;;
+<<<<<<< HEAD
 esac
+=======
+esac
+>>>>>>> d0833c9d4367ae978e6955ca6284e066894ed36f
