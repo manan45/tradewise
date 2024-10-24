@@ -1,6 +1,7 @@
 import asyncio
 import pandas as pd
 from dhanhq import dhanhq
+import requests
 from tenacity import retry, wait_fixed, stop_after_attempt
 from app.core.drivers.mongodb_client import get_database
 
