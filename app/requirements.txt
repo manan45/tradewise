@@ -8,3 +8,4 @@ kafka-python
 flask
 ray
 debugpy
+dm_tree
