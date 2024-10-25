@@ -1,5 +1,3 @@
-import asyncio
-import pandas as pd
 from sqlalchemy import create_engine
 from app.core.drivers.dhan import DhanAPI
 
