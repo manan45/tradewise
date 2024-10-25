@@ -2,8 +2,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 import asyncio
-from ..utils.data_loader import load_stock_data, get_latest_stock_data
-from ..utils.ai_model import generate_trade_suggestions
+from app.utils.data_loader import load_stock_data, get_latest_stock_data
+from app.utils.ai_model import generate_trade_suggestions
 from pydantic import BaseModel
 
 app = FastAPI(title="Stock Trading API",
