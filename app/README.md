@@ -6,6 +6,32 @@ This application provides stock trading suggestions using AI models. It follows 
 
 ## Clean Architecture
 
+
+```mermaid
+graph TD
+    %% Data Pipeline Section %%
+    subgraph "Data Pipeline"
+        A[Data API] --> B[Data Fetcher]
+        B --> C[Queue System]
+        C --> D[Queue Consumer]
+    end
+
+    %% AI Training and Storage Section %%
+    subgraph "AI Training and Storage"
+        D --> E[Postgres Database]
+        E --> F[Model Trainer]
+        F --> G[AI Prediction Model]
+        G --> E[Forecasted Data]
+    end
+
+    %% Application Layer Section %%
+    subgraph "Application Layer"
+        E --> H[Backend API]
+        H --> I[User Interface (UI)]
+        I --> H
+    end
+
+    
 The application is organized into the following layers:
 
 1. **Entities**: Core business objects.
