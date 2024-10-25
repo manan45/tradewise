@@ -20,6 +20,12 @@ __pycache__/
 venv/
 env/
 
+.aider*
+.env
+
+
+experiments/
+
 # Logs
 *.log
 

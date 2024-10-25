@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Price Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <h1>Stock Price: Actual vs Forecast</h1>
+    <div id="plot"></div>
+    <div id="suggestions"></div>
+    <script>
+        fetch('/api/data')
+            .then(response => response.json())
+            .then(data => {
+                Plotly.newPlot('plot', JSON.parse(data.plot).data, JSON.parse(data.plot).layout);
+                const suggestionsDiv = document.getElementById('suggestions');
+                suggestionsDiv.innerHTML = '<h2>Trade Suggestions</h2>';
+                data.suggestions.forEach(s => {
+                    suggestionsDiv.innerHTML += `<p>${s.action} at ${s.price}</p>`;
+                });
+            });
+    </script>
+</body>
+</html>

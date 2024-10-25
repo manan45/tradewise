@@ -1,7 +1,7 @@
 # Stock Trading Application
 ## System Architecture
 
-![Trade Management Architecture](architecture.svg)
+![Trade Management Architecture](docs/architecture.svg)
 
 ## Overview
 
