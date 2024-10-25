@@ -1,12 +1,13 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from app.utils.data_loader import load_stock_data, get_latest_stock_data
+from app.utils.data_loader import get_latest_stock_data
 from app.utils.ai_model import generate_trade_suggestions
 from pydantic import BaseModel
 from typing import List
 from app.core.domain.models import DetailedTradeSuggestion
-from sqlalchemy.orm import Session
+from app.core.use_cases.trade_suggestions import TradeSuggestions
+from app.core.infrastructure.repositories.stock_repository import StockRepository
 from app.core.database import get_db_session
 
 app = FastAPI(
@@ -45,8 +46,9 @@ class TradeSuggestionRequest(BaseModel):
 @app.post("/trade-suggestions", response_model=List[DetailedTradeSuggestion])
 def get_trade_suggestions(request: TradeSuggestionRequest):
     with get_db_session() as db:
-        data = load_stock_data(request.symbol, request.date, db)
-        suggestions = generate_trade_suggestions(data)
+        stock_repository = StockRepository(db)
+        trade_suggestions = TradeSuggestions(stock_repository)
+        suggestions = await trade_suggestions.generate_suggestions()
         return suggestions
 
 @app.websocket("/ws")
