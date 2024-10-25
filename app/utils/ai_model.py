@@ -1,9 +1,4 @@
 import pandas as pd
-import numpy as np
-from keras.models import Sequential
-from keras.layers import Dense, LSTM
-from sklearn.preprocessing import MinMaxScaler
-from prophet import Prophet
 from utils.forecasting import lstm_forecast, forecast_timeseries
 from core.domain.models import DetailedTradeSuggestion
 from sklearn.ensemble import RandomForestRegressor
