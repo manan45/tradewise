@@ -35,3 +35,24 @@ class FetchAndIngest:
     def execute(self):
         # Implement fetching and ingestion logic
         pass
+import pandas as pd
+
+def ingest_data_to_postgres(data, table_name):
+    # Code to ingest data into PostgreSQL
+    pass
+
+def aggregate_and_ingest(dataframe, table_name):
+    timeframes = ['1min', '2min', '5min', '15min', '30min', '1hour', '2hour', '4hour', 'daily', 'weekly', 'monthly', 'yearly']
+    aggregated_data = {}
+    
+    for timeframe in timeframes:
+        aggregated_data[timeframe] = dataframe.resample(timeframe).agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        })
+    
+    for timeframe, data in aggregated_data.items():
+        ingest_data_to_postgres(data, f"{table_name}_{timeframe}")
