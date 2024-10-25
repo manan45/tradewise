@@ -44,7 +44,7 @@ class TradeSuggestionRequest(BaseModel):
     date: str
 
 @app.post("/trade-suggestions", response_model=List[DetailedTradeSuggestion])
-def get_trade_suggestions(request: TradeSuggestionRequest):
+async def get_trade_suggestions(request: TradeSuggestionRequest):
     with get_db_session() as db:
         stock_repository = StockRepository(db)
         trade_suggestions = TradeSuggestions(stock_repository)
