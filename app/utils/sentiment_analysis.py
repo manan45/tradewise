@@ -20,3 +20,8 @@ def get_sentiment_scores(data):
     """
     data['sentiment_score'] = analyze_sentiment(data['news'])
     return data
+# Sentiment analysis utilities
+
+def analyze_sentiment(text):
+    # Implement sentiment analysis logic
+    pass

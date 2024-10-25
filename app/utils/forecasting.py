@@ -43,3 +43,8 @@ def lstm_forecast(data, look_back=1):
     predictions = model.predict(X)
     predictions = scaler.inverse_transform(predictions)
     return predictions
+# Forecasting utilities
+
+def forecast(data):
+    # Implement forecasting logic
+    pass

@@ -29,3 +29,9 @@ if __name__ == "__main__":
 def ingest_data_to_postgres(data, table_name):
     # Logic to store data in Postgres
     pass
+# Use case for fetching and ingesting data
+
+class FetchAndIngest:
+    def execute(self):
+        # Implement fetching and ingestion logic
+        pass

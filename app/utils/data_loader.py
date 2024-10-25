@@ -32,3 +32,8 @@ def get_latest_stock_data() -> pd.DataFrame:
     """
     df = load_stock_data()
     return df.tail(1)
+# Data loading utilities
+
+def load_data():
+    # Implement data loading logic
+    pass

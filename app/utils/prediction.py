@@ -39,3 +39,8 @@ def generate_predictions(model, data):
     """
     data['predictions'] = model.predict(data[['lag_1', 'lag_2', 'sentiment_score']])
     return data
+# Prediction utilities
+
+def predict(data):
+    # Implement prediction logic
+    pass

@@ -13,3 +13,9 @@ class DetailedTradeSuggestion(BaseModel):
     high: float = Field(...)
     low: float = Field(...)
     close: float = Field(...)
+# Define your domain models here
+
+class Stock:
+    def __init__(self, symbol, price):
+        self.symbol = symbol
+        self.price = price
