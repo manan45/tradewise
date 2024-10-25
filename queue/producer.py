@@ -17,3 +17,11 @@ def send_message(message):
 
 if __name__ == "__main__":
     send_message('Hello World!')
+from kafka import KafkaProducer
+
+def create_producer():
+    return KafkaProducer(bootstrap_servers='localhost:9092')
+
+def send_message(producer, topic, message):
+    producer.send(topic, value=message.encode('utf-8'))
+    producer.flush()
