@@ -47,7 +47,8 @@ class TradeSuggestionRequest(BaseModel):
 async def get_trade_suggestions(request: TradeSuggestionRequest):
     with get_db_session() as db:
         stock_repository = StockRepository(db)
-        trade_suggestions = TradeSuggestions(stock_repository)
+        trade_suggestions_service = TradeSuggestionsService(stock_repository)
+        trade_suggestions = TradeSuggestions(trade_suggestions_service)
         suggestions = await trade_suggestions.generate_suggestions()
         return suggestions
 

@@ -1,7 +1,8 @@
 from app.utils.ai_model import generate_trade_suggestions
 import pandas as pd
+from app.core.domain.services.trade_suggestions_service_interface import TradeSuggestionsServiceInterface
 
-class TradeSuggestionsService:
+class TradeSuggestionsService(TradeSuggestionsServiceInterface):
     def __init__(self, stock_repository):
         self.stock_repository = stock_repository
 
