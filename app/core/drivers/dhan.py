@@ -1,8 +1,7 @@
 import pandas as pd
 from dhanhq import dhanhq
 from tenacity import retry, wait_fixed, stop_after_attempt
-from websocket import enableTrace
-from websocket_client import WebSocketApp
+from websocket import enableTrace, WebSocketApp
 import json
 import threading
 import os
