@@ -1,36 +1,23 @@
 external: External Data API
 
 data_pipeline: Data Engineering {
-  fetcher
-  queue
-  consumer
+  fetcher: Data Fetcher
+  queue: Kafka {
+    shape: queue
+  }
+  consumer: Data Consumer
 }
 
 ml_engineering: Machine Learning Engineering {
-  trainer
-  model
+  trainer: Trainer
+  model: Tradewise
 }
 
 application_layer: Application Layer {
-  backend
-  ui
+  backend: Backend  
+  ui: User Interface
 }
 
-fetcher: Data Fetcher
-
-queue: Kafka {
-  shape: queue
-}
-
-consumer: Data consumer
-
-trainer: Trainer
-
-model: Tradewise
-
-backend: Backend
-
-ui: User Interface
 postgres: Postgres {
   shape: cylinder
   icon: https://icons.terrastruct.com/dev%2Fpostgresql.svg
