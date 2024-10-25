@@ -106,3 +106,136 @@ def generate_trade_suggestions(data: pd.DataFrame) -> list:
 def train_model(data):
     # Implement model training logic
     pass
+
+
+
+from prophet import Prophet
+import pandas as pd
+from keras.models import Sequential
+import numpy as np
+from keras.layers import Dense, LSTM
+from sklearn.preprocessing import MinMaxScaler
+
+def forecast_timeseries(data):
+    df = pd.DataFrame(data)
+    df.columns = ['ds', 'y']
+    model = Prophet()
+    model.fit(df)
+    future = model.make_future_dataframe(periods=365)
+    forecast = model.predict(future)
+    return forecast[['ds', 'yhat']]
+
+def lstm_forecast(data, look_back=1):
+    # Prepare data
+    data = data[['y']].values
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    data = scaler.fit_transform(data)
+
+    # Create dataset
+    def create_dataset(data, look_back=1):
+        X, Y = [], []
+        for i in range(len(data) - look_back - 1):
+            a = data[i:(i + look_back), 0]
+            X.append(a)
+            Y.append(data[i + look_back, 0])
+        return np.array(X), np.array(Y)
+
+    X, Y = create_dataset(data, look_back)
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+
+    # Build LSTM model
+    model = Sequential()
+    model.add(LSTM(50, input_shape=(look_back, 1)))
+    model.add(Dense(1))
+    model.compile(loss='mean_squared_error', optimizer='adam')
+    model.fit(X, Y, epochs=10, batch_size=1, verbose=2)
+
+    # Make predictions
+    predictions = model.predict(X)
+    predictions = scaler.inverse_transform(predictions)
+    return predictions
+# Forecasting utilities
+
+def forecast(data):
+    # Implement forecasting logic
+    pass
+
+
+
+
+
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+
+def train_prediction_model(data):
+    """
+    Train a prediction model using RandomForestRegressor.
+
+    :param data: DataFrame containing features and target variable.
+    :return: Trained model.
+    """
+    # Example feature engineering
+    data['lag_1'] = data['close'].shift(1)
+    data['lag_2'] = data['close'].shift(2)
+    data.dropna(inplace=True)
+
+    X = data[['lag_1', 'lag_2', 'sentiment_score']]
+    y = data['close']
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+
+    predictions = model.predict(X_test)
+    mse = mean_squared_error(y_test, predictions)
+    print(f"Model Mean Squared Error: {mse}")
+
+    return model
+
+def generate_predictions(model, data):
+    """
+    Generate predictions for the next 2 days in 15-minute intervals.
+
+    :param model: Trained prediction model.
+    :param data: DataFrame containing features for prediction.
+    :return: DataFrame with predictions.
+    """
+    data['predictions'] = model.predict(data[['lag_1', 'lag_2', 'sentiment_score']])
+    return data
+# Prediction utilities
+
+def predict(data):
+    # Implement prediction logic
+    pass
+
+
+from transformers import pipeline
+
+def analyze_sentiment(news_articles):
+    """
+    Analyze sentiment of news articles using a pre-trained language model.
+
+    :param news_articles: List of news articles.
+    :return: List of sentiment scores.
+    """
+    sentiment_pipeline = pipeline("sentiment-analysis")
+    sentiments = [sentiment_pipeline(article)[0] for article in news_articles]
+    return sentiments
+
+def get_sentiment_scores(data):
+    """
+    Get sentiment scores for a DataFrame containing news articles.
+
+    :param data: DataFrame with a 'news' column.
+    :return: DataFrame with an additional 'sentiment_score' column.
+    """
+    data['sentiment_score'] = analyze_sentiment(data['news'])
+    return data
+# Sentiment analysis utilities
+
+def analyze_sentiment(text):
+    # Implement sentiment analysis logic
+    pass

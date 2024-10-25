@@ -1,50 +1,24 @@
 from sqlalchemy import create_engine
-from app.core.drivers.dhan import DhanAPI
-import pandas as pd
-import asyncio
-
-# Define your PostgreSQL connection string
-DATABASE_URI = 'postgresql://user:password@localhost/mydatabase'
-
-def ingest_data_to_postgres(data, table_name):
-    engine = create_engine(DATABASE_URI)
-    data.to_sql(table_name, engine, if_exists='replace', index=False)
-
-async def fetch_and_ingest_index_data():
-    dhan_api = DhanAPI(api_key="your_api_key")
-    # Simulate fetching data from Dhan API
-    sample_data = {
-        "symbol": "NIFTY",
-        "channels": {
-            "RSI": 70.5,
-            "Moving Average": 150.3,
-            "Forecast": 155.0
-        }
-    }
-    df = pd.DataFrame([sample_data])
-    ingest_data_to_postgres(df, 'index_data')
-
-if __name__ == "__main__":
-    asyncio.run(fetch_and_ingest_index_data())
-def ingest_data_to_postgres(data, table_name):
-    # Logic to store data in Postgres
-    pass
-# Use case for fetching and ingesting data
-
-class FetchAndIngest:
-    def execute(self):
-        # Implement fetching and ingestion logic
-        pass
 import pandas as pd
 
+
 def ingest_data_to_postgres(data, table_name):
-    # Code to ingest data into PostgreSQL
-    pass
+    engine = 
+    data.to_sql(table_name, engine, if_exists='append', index=True)
 
 def aggregate_and_ingest(dataframe, table_name):
-    timeframes = ['1min', '2min', '5min', '15min', '30min', '1hour', '2hour', '4hour', 'daily', 'weekly', 'monthly', 'yearly']
+    timeframes = ['1min', '2min', '5min', '15min', '30min', '1H', '2H', '4H', 'D', 'W', 'M', 'Y']
+    
+    if 'timestamp' not in dataframe.columns:
+        raise ValueError("Dataframe must contain a 'timestamp' column")
+    
     dataframe['timestamp'] = pd.to_datetime(dataframe['timestamp'])
     dataframe.set_index('timestamp', inplace=True)
+    
+    required_columns = ['open', 'high', 'low', 'close', 'volume']
+    if not all(col in dataframe.columns for col in required_columns):
+        raise ValueError(f"Dataframe must contain all of these columns: {required_columns}")
+    
     aggregated_data = {}
     
     for timeframe in timeframes:
@@ -58,3 +32,14 @@ def aggregate_and_ingest(dataframe, table_name):
     
     for timeframe, data in aggregated_data.items():
         ingest_data_to_postgres(data, f"{table_name}_{timeframe}")
+
+# Example usage:
+# df = pd.DataFrame({
+#     'timestamp': pd.date_range(start='2023-01-01', end='2023-01-02', freq='1min'),
+#     'open': [100] * 1440,
+#     'high': [110] * 1440,
+#     'low': [90] * 1440,
+#     'close': [105] * 1440,
+#     'volume': [1000] * 1440
+# })
+# aggregate_and_ingest(df, 'stock_data')
