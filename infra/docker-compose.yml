@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - kafka
+    environment:
+      - DB_HOST=db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=stockdb
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.dashboard
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+
+  db:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=stockdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    environment:
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    depends_on:
+      - zookeeper
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      - ZOOKEEPER_CLIENT_PORT=2181
+
+  data_service:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.data_service
+    depends_on:
+      - kafka
+      - db
+
+  training_service:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.training_service
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
