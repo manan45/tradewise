@@ -1,17 +1,35 @@
-Data_Pipeline {
-  "Data API" -> "Fetcher"
-  "Fetcher" -> "Queue"
-  "Queue" -> "Consumer"
+external: External Data API
+
+fetcher: Data Fetcher
+
+queue: Kafka {
+  shape: cylinder
 }
 
-AI_Training_Storage {
-  "Consumer" -> "Postgres"
-  "Postgres" -> "Trainer"
-  "Trainer" -> "AI Model"
-  "AI Model" -> "Postgres": Forecasted Data
+consumer: Data consumer
+
+trainer: Trainer
+
+model: Tradewise
+
+backend: Backend
+
+ui: User Interface
+postgres: Postgres {
+  shape: cylinder
+  icon: https://icons.terrastruct.com/dev%2Fpostgresql.svg
+  icon.near: bottom-center
 }
 
-Application_Layer {
-  "Postgres" -> "Backend API"
-  "Backend API" <-> "UI"
-}
+ui -> backend: fetch data analytics
+backend -> model: generate trade suggestions
+backend -> postgres: fetch data from database
+
+fetcher -> external: fetch trader data
+fetcher -> queue: send data to queue
+queue -> consumer: send data to consumer
+consumer -> postgres: insert data in postgres
+
+trainer -> postgres: read the data from postgres
+trainer -> model: train the model
+model -> postgres: update the forecast
