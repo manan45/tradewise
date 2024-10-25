@@ -27,8 +27,8 @@ graph TD
     %% Application Layer Section %%
     subgraph "Application Layer"
         E --> H[Backend API]
-        H --> I[User Interface (UI)]
-        I --> H
+        H --> I[User Interface (UI)];
+        I --> H;
     end
 
     
