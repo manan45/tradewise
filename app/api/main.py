@@ -1,14 +1,19 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
-import asyncio
 from fastapi.openapi.utils import get_openapi
-from utils.data_loader import load_stock_data, get_latest_stock_data
-from utils.ai_model import generate_trade_suggestions
+from app.utils.data_loader import load_stock_data, get_latest_stock_data
+from app.utils.ai_model import generate_trade_suggestions
 from pydantic import BaseModel
+from typing import List
+from app.core.domain.models import DetailedTradeSuggestion
+from sqlalchemy.orm import Session
+from app.core.database import get_db_session
 
-app = FastAPI(title="Stock Trading API",
-              description="API for stock trading suggestions and real-time data",
-              version="1.0.0")
+app = FastAPI(
+    title="Stock Trading API",
+    description="API for stock trading suggestions and real-time data",
+    version="1.0.0",
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -37,36 +42,23 @@ class TradeSuggestionRequest(BaseModel):
     symbol: str
     date: str
 
-@app.post("/trade-suggestions")
+@app.post("/trade-suggestions", response_model=List[DetailedTradeSuggestion])
 def get_trade_suggestions(request: TradeSuggestionRequest):
-    data = load_stock_data(request.symbol, request.date)
-    suggestions = generate_trade_suggestions(data)
-    return suggestions
+    with get_db_session() as db:
+        data = load_stock_data(request.symbol, request.date, db)
+        suggestions = generate_trade_suggestions(data)
+        return suggestions
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            await asyncio.sleep(5)  # Simulate real-time data fetching every 5 seconds
             latest_data = get_latest_stock_data()
             suggestions = generate_trade_suggestions(latest_data)
             await websocket.send_json(suggestions[0].dict())
     except WebSocketDisconnect:
         print("WebSocket disconnected")
-
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(fetch_real_time_data())
-
-async def fetch_real_time_data():
-    while True:
-        try:
-            # Simulate fetching real-time data
-            await asyncio.sleep(5)  # Fetch data every 5 seconds
-            print("Fetching real-time data...")
-        except Exception as e:
-            print(f"Error fetching real-time data: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
