@@ -43,6 +43,8 @@ def ingest_data_to_postgres(data, table_name):
 
 def aggregate_and_ingest(dataframe, table_name):
     timeframes = ['1min', '2min', '5min', '15min', '30min', '1hour', '2hour', '4hour', 'daily', 'weekly', 'monthly', 'yearly']
+    dataframe['timestamp'] = pd.to_datetime(dataframe['timestamp'])
+    dataframe.set_index('timestamp', inplace=True)
     aggregated_data = {}
     
     for timeframe in timeframes:
@@ -52,7 +54,7 @@ def aggregate_and_ingest(dataframe, table_name):
             'low': 'min',
             'close': 'last',
             'volume': 'sum'
-        })
+        }).dropna()
     
     for timeframe, data in aggregated_data.items():
         ingest_data_to_postgres(data, f"{table_name}_{timeframe}")

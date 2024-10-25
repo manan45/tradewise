@@ -16,7 +16,10 @@ class QueueConsumer:
 
     def consume(self, process_message):
         # Code to consume messages from Kafka
-        pass
+        # This should include connecting to Kafka and consuming messages
+        consumer = KafkaConsumer(self.queue_name, bootstrap_servers='localhost:9092')
+        for message in consumer:
+            process_message(message.value)
 
     def consume_and_process(self, callback):
         def process_message(message):

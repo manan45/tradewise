@@ -16,7 +16,9 @@ class QueueProducer:
 
     def produce(self, message):
         # Code to send message to Kafka
-        pass
+        # This should include connecting to Kafka and sending messages
+        producer = KafkaProducer(bootstrap_servers='localhost:9092')
+        producer.send(self.queue_name, value=message.encode('utf-8'))
 
     def produce_dataframe(self, dataframe):
         for index, row in dataframe.iterrows():
