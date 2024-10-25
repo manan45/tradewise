@@ -1,7 +1,7 @@
 import pandas as pd
 from dhanhq import dhanhq
 from tenacity import retry, wait_fixed, stop_after_attempt
-import websocket
+from websocket import WebSocketApp, enableTrace
 import json
 import threading
 import os
@@ -86,8 +86,8 @@ class DhanAPI:
         logging.info("WebSocket connection opened")
 
     def connect_websocket(self):
-        websocket.enableTrace(True)
-        self.ws = websocket.WebSocketApp(
+        enableTrace(True)
+        self.ws = WebSocketApp(
             f"wss://api-feed.dhan.co?version=2&token={self.client.access_token}&clientId={self.client.client_id}&authType=2",
             on_message=self.on_message,
             on_error=self.on_error,
