@@ -1,6 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+from fastapi.openapi.utils import get_openapi
 from utils.data_loader import load_stock_data, get_latest_stock_data
 from utils.ai_model import generate_trade_suggestions
 from pydantic import BaseModel

@@ -5,6 +5,9 @@ from sklearn.ensemble import RandomForestRegressor
 from ta.trend import MACD
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
+import gym
+import ray
+from ray.rllib.agents import ppo
 
 ray.init(ignore_reinit_error=True)
 

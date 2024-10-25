@@ -1,6 +1,7 @@
 from prophet import Prophet
 import pandas as pd
 from keras.models import Sequential
+import numpy as np
 from keras.layers import Dense, LSTM
 from sklearn.preprocessing import MinMaxScaler
 
