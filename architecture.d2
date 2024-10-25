@@ -1,0 +1,17 @@
+Data_Pipeline {
+  "Data API" -> "Fetcher"
+  "Fetcher" -> "Queue"
+  "Queue" -> "Consumer"
+}
+
+AI_Training_Storage {
+  "Consumer" -> "Postgres"
+  "Postgres" -> "Trainer"
+  "Trainer" -> "AI Model"
+  "AI Model" -> "Postgres": Forecasted Data
+}
+
+Application_Layer {
+  "Postgres" -> "Backend API"
+  "Backend API" <-> "UI"
+}

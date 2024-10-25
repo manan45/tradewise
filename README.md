@@ -1,4 +1,7 @@
 # Stock Trading Application
+## System Architecture
+
+![Trade Management Architecture](architecture.svg)
 
 ## Overview
 
@@ -69,3 +72,28 @@ This application follows the Clean Code Architecture pattern, which is divided i
 
 - Use the Makefile to run different services.
 - Use Docker Compose to set up MongoDB.
+
+
+## API Documentation
+
+The API is documented using OpenAPI standards. You can access the API documentation by visiting `http://localhost:8000/docs` after starting the server.
+
+## UI Dashboard
+
+A UI dashboard is available to view the forecast vs actual tracking. Access it by visiting `http://localhost:8080` after starting the services.
+
+## Usage
+
+### Starting Services
+
+To start all services, use the provided shell script:
+
+```bash
+./start_services.sh
+```
+
+Access the API at `http://localhost:8000/trade-suggestions` to get trade suggestions.
+
+## Testing
+
+Tests are located in the `/tests` directory. Run tests using:
