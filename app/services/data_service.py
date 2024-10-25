@@ -1,4 +1,4 @@
-from app.core.drivers.dhanhq.dhanhq import dhanhq
+from app.connectors.dhanhq.dhanhq import dhanhq
 from app.pipelines.fetcher import QueueProducer
 from app.pipelines.ingestor import QueueConsumer
 from app.core.use_cases.fetch_and_ingest import FetchAndIngestUseCase
@@ -7,6 +7,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import requests
 from typing import List
+import os
+from dotenv import load_dotenv
 
 class DataService:
     def __init__(self, client_id: str, access_token: str):
@@ -27,8 +29,13 @@ class DataService:
         
         if historical_data['status'] == 'success':
             df = pd.DataFrame(historical_data['data'])
-            df['timestamp'] = pd.to_datetime(df['date'])
-            df = df.drop('date', axis=1)
+            if 'date' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['date'])
+                df = df.drop('date', axis=1)
+            elif 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            else:
+                raise KeyError("Neither 'date' nor 'timestamp' column found in the data")
             return df
         else:
             raise Exception(f"Failed to fetch historical data: {historical_data['remarks']}")
@@ -52,7 +59,7 @@ class DataService:
 
     def load_sample_data(self) -> pd.DataFrame:
         data = {
-            'date': pd.date_range(start='2023-01-01', end='2023-12-31', freq='D'),
+            'timestamp': pd.date_range(start='2023-01-01', end='2023-12-31', freq='D'),
             'open': [100 + i * 0.1 for i in range(365)],
             'high': [101 + i * 0.1 for i in range(365)],
             'low': [99 + i * 0.1 for i in range(365)],
@@ -69,7 +76,14 @@ class DataService:
         return df.tail(1)
 
 def main():
-    data_service = DataService(client_id='your_client_id', access_token='your_access_token')
+    load_dotenv()  # This will load environment variables from a .env file
+    client_id = os.getenv('DHAN_CLIENT_ID', 'tradewise')
+    access_token = os.getenv('DHAN_ACCESS_TOKEN', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzMyMjE5NjE1LCJ0b2tlbkNvbnN1bWVyVHlwZSI6IlNFTEYiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMTIyOTY2NSJ9.9GDCcMbrzJc9cdKKDGvj_hQJXpqayb7rgh4srpY5gTL9QTE1LfnvsCBTve85kNNw3DXr-33UY8diDy4090_UEQ')
+    
+    if not client_id or not access_token:
+        raise ValueError("DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN must be set in the environment or .env file")
+    
+    data_service = DataService(client_id=client_id, access_token=access_token)
     security_ids = ['1333']  # HDFC Bank
     exchange_segment = data_service.dhan_api.NSE
     data_service.fetch_and_process_data(security_ids, exchange_segment)

@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import List, Decimal
+from typing import List
+from decimal import Decimal
 from ..entities.stock import Stock
-from ..entities.trade_suggestion import DetailedTradeSuggestion
+from ..models.trade_suggestion import DetailedTradeSuggestion
 
 class TradeSuggestionsService(ABC):
     @abstractmethod

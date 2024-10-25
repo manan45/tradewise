@@ -1,10 +1,7 @@
-.PHONY: run-api run-dashboard run-data-service run-training-service start-services stop-services
+.PHONY: run-api run-data-service run-training-service start-services stop-services
 
 run-api:
 	uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
-
-run-dashboard:
-	python -m flask run --host 0.0.0.0 --port 8080
 
 run-data-service:
 	python -m app.services.data_service

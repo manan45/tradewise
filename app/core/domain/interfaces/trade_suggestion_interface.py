@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Any
 from ..entities.stock import Stock
-from ..entities.trade_suggestion import DetailedTradeSuggestion
+from ..models.trade_suggestion import DetailedTradeSuggestion
 
 
 class TradeSuggestionsServiceInterface(ABC):

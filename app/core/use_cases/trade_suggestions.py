@@ -1,6 +1,6 @@
 from app.core.domain.interfaces.trade_suggestions_service import TradeSuggestionsService
 from app.core.domain.entities.stock import Stock
-from app.core.domain.entities.trade_suggestion import DetailedTradeSuggestion
+from app.core.domain.models.trade_suggestion import DetailedTradeSuggestion
 from app.core.repositories.stock_repository import StockRepository
 from typing import List
 from decimal import Decimal
@@ -28,7 +28,7 @@ class TradeSuggestionsUseCase:
         suggestions = await self.generate_suggestions()
         return [suggestion for suggestion in suggestions if suggestion.action.lower() == action.lower()]
 
-class SimpleTradeSuggestionsService(TradeSuggestionsService):
+class TradeSuggestionsService(TradeSuggestionsService):
     async def get_trade_suggestions(self, stocks: List[Stock]) -> List[DetailedTradeSuggestion]:
         suggestions = []
         for stock in stocks:

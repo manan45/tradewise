@@ -1,15 +1,16 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from app.utils.data_loader import get_latest_stock_data
-from app.utils.ai_model import generate_trade_suggestions
-from pydantic import BaseModel
+from app.services.data_service import DataService
+from app.services.tradewise_ai import TradewiseAI
 from typing import List
-from app.core.domain.models import DetailedTradeSuggestion
-from app.core.use_cases.trade_suggestions import TradeSuggestions
-from app.core.domain.services.trade_suggestions_service import TradeSuggestionsService
-from app.core.infrastructure.repositories.stock_repository import StockRepository
-from app.core.database import get_db_session
+from app.core.domain.models.trade_suggestion import DetailedTradeSuggestion
+from app.core.use_cases.trade_suggestions import TradeSuggestionsService, TradeSuggestionsUseCase
+from app.core.repositories.stock_repository import StockRepository
+from app.connectors.postgres_client import postgres_client, get_db
+from app.core.domain.models.trade_suggestion_request import TradeSuggestionRequest
+from sqlalchemy.orm import Session
+from app.connectors.stock_app_apple import AppleStocksConnector
 
 app = FastAPI(
     title="Stock Trading API",
@@ -40,29 +41,30 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
-class TradeSuggestionRequest(BaseModel):
-    symbol: str
-    date: str
+
+
 
 @app.post("/trade-suggestions", response_model=List[DetailedTradeSuggestion])
-async def get_trade_suggestions(request: TradeSuggestionRequest):
-    with get_db_session() as db:
-        stock_repository = StockRepository(db)
-        trade_suggestions_service = TradeSuggestionsService(stock_repository)
-        trade_suggestions = TradeSuggestions(trade_suggestions_service)
-        suggestions = await trade_suggestions.generate_suggestions()
-        return suggestions
+async def get_trade_suggestions(request: TradeSuggestionRequest, db: Session = Depends(get_db)):
+    stock_repository = StockRepository(db)
+    trade_suggestions_service = TradeSuggestionsService(stock_repository)
+    trade_suggestions = TradeSuggestionsUseCase(stock_repository, trade_suggestions_service)
+    suggestions = await trade_suggestions.generate_suggestion_for_stock(request.symbol)
+    return suggestions
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            latest_data = get_latest_stock_data()
-            suggestions = generate_trade_suggestions(latest_data)
+            data_service = DataService()
+            tradewise_ai = TradewiseAI()
+            latest_data = await data_service.get_latest_stock_data()
+            suggestions = await tradewise_ai.generate_trade_suggestions(latest_data)
             await websocket.send_json(suggestions[0].dict())
     except WebSocketDisconnect:
         print("WebSocket disconnected")
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -13,6 +13,3 @@ class DetailedTradeSuggestion(BaseModel):
     high: Decimal = Field(...)
     low: Decimal = Field(...)
     close: Decimal = Field(...)
-
-    class Config:
-        arbitrary_types_allowed = True

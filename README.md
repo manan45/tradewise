@@ -23,8 +23,7 @@ Our application follows a modular architecture designed for scalability and main
    - Tradewise Model: Generates stock price forecasts
 
 3. Application Layer:
-   - Backend: Serves data and predictions to the frontend
-   - User Interface (UI): Presents data and forecasts to users
+   - Backend: Serves data and predictions via API
 
 4. Database:
    - PostgreSQL: Stores historical and forecasted data
@@ -37,25 +36,8 @@ Our application follows a modular architecture designed for scalability and main
   - `/services`: Services for data fetching, processing, and AI training.
   - `/pipelines`: Data pipelines for fetching and ingesting stock data.
   - `/connectors`: Database and message queue connectors.
-- `/dashboard`: Flask application for the UI dashboard.
 - `/infra`: Infrastructure-related files (Docker, etc.).
 - `/migrations`: Database migration scripts.
-
-## Documentation Links
-
-Here are the documentation links for the frameworks and libraries used in this project:
-
-- **Keras**: [Keras Documentation](https://keras.io/)
-- **FastAPI**: [FastAPI Documentation](https://fastapi.tiangolo.com/)
-- **Uvicorn**: [Uvicorn Documentation](https://www.uvicorn.org/)
-- **Pandas**: [Pandas Documentation](https://pandas.pydata.org/docs/)
-- **NumPy**: [NumPy Documentation](https://numpy.org/doc/)
-- **Kafka-Python**: [Kafka-Python Documentation](https://kafka-python.readthedocs.io/en/master/)
-- **Flask**: [Flask Documentation](https://flask.palletsprojects.com/)
-- **SQLAlchemy**: [SQLAlchemy Documentation](https://docs.sqlalchemy.org/en/20/)
-- **Prophet**: [Prophet Documentation](https://facebook.github.io/prophet/)
-- **Pydantic**: [Pydantic Documentation](https://docs.pydantic.dev/)
-- **Docker**: [Docker Documentation](https://docs.docker.com/)
 
 ## Setup
 
@@ -64,37 +46,30 @@ Here are the documentation links for the frameworks and libraries used in this p
    pip install -r requirements.txt
    ```
 
-2. Set up the database:
-   ```bash
-   make migrate
+2. Set up environment variables:
    ```
+   cp .env.example .env
+   ```
+   Edit the `.env` file with your configuration.
 
-3. Start the services:
+3. Start services:
    ```bash
    make start-services
    ```
 
-## Usage
+## Running the Application
 
-- API: Access at `http://localhost:8000`
-- Dashboard: Access at `http://localhost:8080`
-- API Documentation: `http://localhost:8000/docs`
+- API server: `make run-api`
+- Data service: `make run-data-service`
+- Training service: `make run-training-service`
 
-## Development
+## API Documentation
 
-- Run API server: `make run-api`
-- Run Dashboard: `make run-dashboard`
-- Run Data Service: `make run-data-service`
-- Run Training Service: `make run-training-service`
-
-## Testing
-
-Tests are located in the `/tests` directory. Run tests using the appropriate testing framework.
+Access the API documentation at `http://localhost:8000/docs` after starting the server.
 
 ## Technologies Used
 
 - FastAPI: Backend API framework
-- Flask: UI Dashboard
 - Kafka: Queue system for data pipeline
 - PostgreSQL: Database for storing stock data and predictions
 - SQLAlchemy: ORM for database operations
