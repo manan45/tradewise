@@ -24,6 +24,24 @@ The application is organized into the following layers:
   - **/utils**: Utility functions for data loading and AI model operations.
 
 ## Setup
+=======
+## Documentation Links
+
+Here are the documentation links for the frameworks and libraries used in this project:
+
+- **Keras**: [Keras Documentation](https://keras.io/)
+- **FastAPI**: [FastAPI Documentation](https://fastapi.tiangolo.com/)
+- **Uvicorn**: [Uvicorn Documentation](https://www.uvicorn.org/)
+- **Pandas**: [Pandas Documentation](https://pandas.pydata.org/docs/)
+- **Openpyxl**: [Openpyxl Documentation](https://openpyxl.readthedocs.io/en/stable/)
+- **NumPy**: [NumPy Documentation](https://numpy.org/doc/)
+- **Kafka-Python**: [Kafka-Python Documentation](https://kafka-python.readthedocs.io/en/master/)
+- **SQLAlchemy**: [SQLAlchemy Documentation](https://docs.sqlalchemy.org/en/20/)
+- **Prophet**: [Prophet Documentation](https://facebook.github.io/prophet/)
+- **PyMongo**: [PyMongo Documentation](https://pymongo.readthedocs.io/en/stable/)
+
+
+## Setup
 
 1. Install dependencies:
    ```bash

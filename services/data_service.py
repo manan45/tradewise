@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import threading
-from app.core.interface_adapters.dhan import fetch_and_store_stock_data
+from app.core.drivers.dhan import fetch_and_store_stock_data
 
 app = Flask(__name__)
 

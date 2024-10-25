@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import threading
-from app.mongodb_client import MongoDBClient
+from app.core.drivers.mongodb_client import MongoDBClient
 
 app = Flask(__name__)
 

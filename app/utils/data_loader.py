@@ -1,29 +1,34 @@
 import pandas as pd
 import os
 
-def load_stock_data_in_chunks(chunk_size=100000) -> pd.DataFrame:
+def load_stock_data() -> pd.DataFrame:
     """
-    Load stock data in chunks for efficient processing.
+    Load sample stock data for testing and development.
 
-    :param chunk_size: Number of rows per chunk.
     :return: DataFrame of stock data.
     """
-    file_path = os.path.join(os.path.dirname(__file__), 'stock_data.csv')
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"No such file or directory: '{file_path}'")
+    # Create a sample dataset
+    data = {
+        'date': pd.date_range(start='2023-01-01', end='2023-12-31', freq='D'),
+        'open': [100 + i * 0.1 for i in range(365)],
+        'high': [101 + i * 0.1 for i in range(365)],
+        'low': [99 + i * 0.1 for i in range(365)],
+        'close': [100.5 + i * 0.1 for i in range(365)],
+        'volume': [1000000 + i * 1000 for i in range(365)]
+    }
     
-    # Load data in chunks
-    chunks = pd.read_csv(file_path, chunksize=chunk_size)
-    df = pd.concat(chunks)
+    df = pd.DataFrame(data)
     
-    # Convert all columns to lower case
-    df.columns = [col.lower().replace(' ', '_').replace('(', '').replace(')', '').replace('₹', 'inr').rstrip('_') for col in df.columns]
-    
-    # Convert 'date' column to datetime format
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], format='%d-%b-%Y')
-    else:
-        raise KeyError("The required column 'date' is not present in the data.")
+    # Add some random news sentiment
+    df['news_sentiment'] = pd.Series([-1, 0, 1]).sample(n=365, replace=True).values
     
     return df
 
+def get_latest_stock_data() -> pd.DataFrame:
+    """
+    Get the latest stock data for real-time processing.
+
+    :return: DataFrame of the latest stock data.
+    """
+    df = load_stock_data()
+    return df.tail(1)

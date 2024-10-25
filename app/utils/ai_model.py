@@ -4,8 +4,8 @@ from keras.models import Sequential
 from keras.layers import Dense, LSTM
 from sklearn.preprocessing import MinMaxScaler
 from prophet import Prophet
-from app.utils.forecasting import lstm_forecast, forecast_timeseries
-from app.core.domain.models import DetailedTradeSuggestion
+from utils.forecasting import lstm_forecast, forecast_timeseries
+from core.domain.models import DetailedTradeSuggestion
 from sklearn.ensemble import RandomForestRegressor
 from ta.trend import MACD
 from ta.momentum import RSIIndicator
