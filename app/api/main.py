@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -11,6 +13,8 @@ from app.connectors.postgres_client import postgres_client, get_db
 from app.core.domain.models.trade_suggestion_request import TradeSuggestionRequest
 from sqlalchemy.orm import Session
 from app.connectors.stock_app_apple import AppleStocksConnector
+
+load_dotenv()
 
 app = FastAPI(
     title="Stock Trading API",
@@ -68,4 +72,4 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=os.getenv('API_HOST'), port=int(os.getenv('API_PORT')))

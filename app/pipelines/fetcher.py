@@ -11,7 +11,8 @@ class QueueProducer:
         print(f"Sent message to {self.topic}")
 
     def produce_dataframe(self, dataframe: pd.DataFrame):
-        self.kafka_connector.produce_dataframe(self.topic, dataframe)
+        for _, row in dataframe.iterrows():
+            self.produce(row.to_dict())
 
     def close(self):
         self.kafka_connector.close()

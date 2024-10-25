@@ -1,92 +1,114 @@
-from app.connectors.dhanhq.dhanhq import dhanhq
-from app.pipelines.fetcher import QueueProducer
-from app.pipelines.ingestor import QueueConsumer
-from app.core.use_cases.fetch_and_ingest import FetchAndIngestUseCase
-from app.core.repositories.stock_repository import StockRepository
+import os
+import logging
+from dotenv import load_dotenv
+from app.connectors.stock_app_apple import AppleStocksConnector
+from app.services.base_data_service import BaseDataService
+from app.connectors.kafka_connector import KafkaConnector
 import pandas as pd
 from datetime import datetime, timedelta
-import requests
-from typing import List
-import os
-from dotenv import load_dotenv
 
-class DataService:
-    def __init__(self, client_id: str, access_token: str):
-        self.dhan_api = dhanhq(client_id=client_id, access_token=access_token)
-        self.producer = QueueProducer(topic='stock_data')
-        self.consumer = QueueConsumer(topic='stock_data', group_id='data_service_group')
-        self.stock_repository = StockRepository()
-        self.fetch_and_ingest_use_case = FetchAndIngestUseCase(self.stock_repository)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class AppleDataService(BaseDataService):
+    def __init__(self):
+        super().__init__()
+        self.stock_api = AppleStocksConnector()
+        self.kafka_connector = KafkaConnector()
+
+    def fetch_historical_data(self, symbol: str, interval: str = '1d', range: str = '1mo') -> pd.DataFrame:
+        try:
+            logger.info(f"Fetching historical data for {symbol}")
+            df = self.stock_api.get_stock_data(symbol, interval, range)
+            if df.empty:
+                logger.warning(f"No historical data available for {symbol}")
+                return pd.DataFrame()
+            df.reset_index(inplace=True)
+            df.rename(columns={'index': 'timestamp'}, inplace=True)
+            logger.info(f"Successfully fetched historical data for {symbol}")
+            return df
+        except Exception as e:
+            logger.error(f"Failed to fetch historical data for {symbol}: {str(e)}")
+            return pd.DataFrame()
+
+    def fetch_real_time_quote(self, symbol: str) -> pd.DataFrame:
+        try:
+            logger.info(f"Fetching real-time quote for {symbol}")
+            quote = self.stock_api.get_real_time_quote(symbol)
+            if not quote:
+                logger.warning(f"No real-time quote available for {symbol}")
+                return pd.DataFrame()
+            df = pd.DataFrame([quote])
+            logger.info(f"Successfully fetched real-time quote for {symbol}")
+            return df
+        except Exception as e:
+            logger.error(f"Failed to fetch real-time quote for {symbol}: {str(e)}")
+            raise
+
+class DhanDataService(BaseDataService):
+    def __init__(self):
+        super().__init__()
+        self.client_id = os.getenv('DHAN_CLIENT_ID')
+        self.access_token = os.getenv('DHAN_ACCESS_TOKEN')
+        if not self.client_id or not self.access_token:
+            raise ValueError("DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN must be set in the environment or .env file")
+        self.dhan_api = dhanhq(client_id=self.client_id, access_token=self.access_token)
+        self.kafka_connector = KafkaConnector()
 
     def fetch_historical_data(self, security_id: str, exchange_segment: str, from_date: str, to_date: str) -> pd.DataFrame:
-        historical_data = self.dhan_api.historical_daily_data(
-            security_id=security_id,
-            exchange_segment=exchange_segment,
-            instrument_type='EQUITY',
-            from_date=from_date,
-            to_date=to_date
-        )
-        
-        if historical_data['status'] == 'success':
-            df = pd.DataFrame(historical_data['data'])
-            if 'date' in df.columns:
+        try:
+            historical_data = self.dhan_api.historical_daily_data(
+                security_id=security_id,
+                exchange_segment=exchange_segment,
+                instrument_type='EQUITY',
+                from_date=from_date,
+                to_date=to_date
+            )
+            
+            if historical_data['status'] == 'success':
+                df = pd.DataFrame(historical_data['data'])
                 df['timestamp'] = pd.to_datetime(df['date'])
                 df = df.drop('date', axis=1)
-            elif 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
             else:
-                raise KeyError("Neither 'date' nor 'timestamp' column found in the data")
-            return df
-        else:
-            raise Exception(f"Failed to fetch historical data: {historical_data['remarks']}")
+                raise Exception(f"Failed to fetch historical data: {historical_data['remarks']}")
+        except Exception as e:
+            logger.error(f"Failed to fetch historical data for {security_id}: {str(e)}")
+            raise
 
-    def fetch_real_time_data(self, api_url: str) -> pd.DataFrame:
-        response = requests.get(api_url)
-        data = response.json()
-        df = pd.DataFrame(data)
-        df['timestamp'] = datetime.now()
-        return df
-
-    def fetch_and_process_data(self, security_ids: List[str], exchange_segment: str):
-        end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-
-        for security_id in security_ids:
-            historical_data = self.fetch_historical_data(security_id, exchange_segment, start_date, end_date)
-            self.producer.produce_dataframe(historical_data)
-
-        self.consumer.consume_and_process(self.fetch_and_ingest_use_case.fetch_and_ingest_stock_data)
-
-    def load_sample_data(self) -> pd.DataFrame:
-        data = {
-            'timestamp': pd.date_range(start='2023-01-01', end='2023-12-31', freq='D'),
-            'open': [100 + i * 0.1 for i in range(365)],
-            'high': [101 + i * 0.1 for i in range(365)],
-            'low': [99 + i * 0.1 for i in range(365)],
-            'close': [100.5 + i * 0.1 for i in range(365)],
-            'volume': [1000000 + i * 1000 for i in range(365)]
-        }
-        
-        df = pd.DataFrame(data)
-        df['news_sentiment'] = pd.Series([-1, 0, 1]).sample(n=365, replace=True).values
-        return df
-
-    def get_latest_stock_data(self) -> pd.DataFrame:
-        df = self.load_sample_data()
-        return df.tail(1)
+    def fetch_real_time_quote(self, security_id: str) -> pd.DataFrame:
+        try:
+            quote = self.dhan_api.get_quote(security_id)
+            if quote['status'] == 'success':
+                df = pd.DataFrame([quote['data']])
+                df['timestamp'] = datetime.now()
+                return df
+            else:
+                raise Exception(f"Failed to fetch real-time quote: {quote['remarks']}")
+        except Exception as e:
+            logger.error(f"Failed to fetch real-time quote for {security_id}: {str(e)}")
+            return pd.DataFrame()
 
 def main():
-    load_dotenv()  # This will load environment variables from a .env file
-    client_id = os.getenv('DHAN_CLIENT_ID', 'tradewise')
-    access_token = os.getenv('DHAN_ACCESS_TOKEN', 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzMyMjE5NjE1LCJ0b2tlbkNvbnN1bWVyVHlwZSI6IlNFTEYiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMTIyOTY2NSJ9.9GDCcMbrzJc9cdKKDGvj_hQJXpqayb7rgh4srpY5gTL9QTE1LfnvsCBTve85kNNw3DXr-33UY8diDy4090_UEQ')
+    load_dotenv()
+    data_service = AppleDataService()
+    symbols = ['AAPL']  # Example symbols, including DHAN
     
-    if not client_id or not access_token:
-        raise ValueError("DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN must be set in the environment or .env file")
-    
-    data_service = DataService(client_id=client_id, access_token=access_token)
-    security_ids = ['1333']  # HDFC Bank
-    exchange_segment = data_service.dhan_api.NSE
-    data_service.fetch_and_process_data(security_ids, exchange_segment)
+    try:
+        # if data_source == 'apple':
+        #     data_service = AppleDataService()
+        #     symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'FB']  # Example symbols
+        # elif data_source == 'dhan':
+        #     data_service = DhanDataService()
+        #     symbols = ['1333']  # Example security_id for HDFC Bank
+        # else:
+        #     raise ValueError(f"Invalid DATA_SOURCE: {data_source}. Must be 'apple' or 'dhan'.")
+        
+        data_service = AppleDataService()
+        symbols = ['AAPL']  # Example symbols
+        data_service.fetch_and_process_data(symbols)
+    except Exception as e:
+        logger.error(f"An error occurred in main: {str(e)}")
 
 if __name__ == "__main__":
     main()

@@ -1,30 +1,68 @@
+import time
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from contextlib import contextmanager
 import os
 from typing import Generator
 import logging
-
-Base = declarative_base()
+import alembic.config
+import alembic.command
+from alembic.config import Config
+from app.core.domain.entities.base import Base
 
 class PostgresClient:
     def __init__(self):
-        self.engine = self._create_engine()
+        self.logger = logging.getLogger(__name__)
+        self.engine = self._create_engine_with_retry()
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.run_migrations()
+
+    def _create_engine_with_retry(self, max_retries=5, delay=5):
+        for attempt in range(max_retries):
+            try:
+                return self._create_engine()
+            except OperationalError as e:
+                if attempt < max_retries - 1:
+                    self.logger.warning(f"Attempt {attempt + 1} failed. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"Failed to connect after {max_retries} attempts.")
+                    raise
 
     def _create_engine(self):
         db_url = self._get_database_url()
-        return create_engine(db_url, pool_pre_ping=True, pool_size=5, max_overflow=10)
+        try:
+            self.logger.info(f"Attempting to connect to database at {db_url}")
+            engine = create_engine(db_url, pool_pre_ping=True, pool_size=5, max_overflow=10)
+            engine.connect()
+            self.logger.info(f"Successfully connected to database at {db_url}")
+            return engine
+        except OperationalError as e:
+            self.logger.error(f"Failed to connect to database at {db_url}. Error: {str(e)}")
+            raise
 
     def _get_database_url(self):
-        db_user = os.getenv("DB_USER", "user")
+        db_user = os.getenv("DB_USER", "postgres")
         db_password = os.getenv("DB_PASSWORD", "password")
-        db_host = os.getenv("DB_HOST", "localhost")
         db_port = os.getenv("DB_PORT", "5432")
-        db_name = os.getenv("DB_NAME", "mydatabase")
+        db_host = os.getenv("DB_HOST", "127.0.0.1")
+        db_name = os.getenv("DB_NAME", "stockdb")
+        self.logger.info(f"Database connection details: HOST={db_host}, PORT={db_port}, DB={db_name}, USER={db_user}")
         return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+    def run_migrations(self):
+        try:
+            self.logger.info("Running database migrations...")
+            alembic_cfg = alembic.config.Config("alembic.ini")
+            script_location = os.path.join(os.path.dirname(__file__), '..', '..', 'migrations')
+            alembic_cfg.set_main_option('script_location', script_location)
+            alembic_cfg.set_main_option("sqlalchemy.url", self._get_database_url())
+            alembic.command.upgrade(alembic_cfg, "head")
+            self.logger.info("Database migrations completed successfully.")
+        except Exception as e:
+            self.logger.error(f"Error running migrations: {str(e)}")
+            raise
 
     @contextmanager
     def get_session(self) -> Generator[Session, None, None]:
@@ -34,7 +72,7 @@ class PostgresClient:
             session.commit()
         except SQLAlchemyError as e:
             session.rollback()
-            logging.error(f"Database error: {str(e)}")
+            self.logger.error(f"Database error: {str(e)}")
             raise
         finally:
             session.close()
@@ -52,7 +90,7 @@ class PostgresClient:
                 session.commit()
             except SQLAlchemyError as e:
                 session.rollback()
-                logging.error(f"Error executing raw SQL: {str(e)}")
+                self.logger.error(f"Error executing raw SQL: {str(e)}")
                 raise
 
 postgres_client = PostgresClient()

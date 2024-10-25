@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import threading
 import asyncio
@@ -6,6 +8,8 @@ from app.services.tradewise_ai import TradewiseAI
 from app.core.repositories.stock_repository import StockRepository
 import pandas as pd
 from sqlalchemy import text
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -73,4 +77,4 @@ def train_model():
     return jsonify({"status": "training started"}), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5002)
+    app.run(host='0.0.0.0', port=int(os.getenv('API_PORT')))
