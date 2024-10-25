@@ -1,6 +1,10 @@
 # MongoDB client implementation
 
+from pymongo import MongoClient
+
 class MongoDBClient:
-    def connect(self):
-        # Implement MongoDB connection logic
-        pass
+    def __init__(self, uri):
+        self.client = MongoClient(uri)
+
+    def connect(self, db_name):
+        return self.client[db_name]
