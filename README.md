@@ -7,12 +7,34 @@
 
 This application provides stock trading suggestions using AI models. It follows clean architecture principles to ensure maintainability and scalability.
 
+## Architecture
+
+Our application follows a modular architecture designed for scalability and maintainability:
+
+1. Data Pipeline:
+   - External Data API: Source of stock data
+   - Data Fetcher: Retrieves data from the API
+   - Kafka Queue: Manages data flow
+   - Data Consumer: Processes queued data
+
+2. Machine Learning:
+   - Trainer: Trains AI models on historical data
+   - Tradewise Model: Generates stock price forecasts
+
+3. Application Layer:
+   - Backend: Serves data and predictions to the frontend
+   - User Interface (UI): Presents data and forecasts to users
+
+4. Database:
+   - Postgres: Stores historical and forecasted data
+
 ## Project Structure
 
 - **/app**: Contains the application code.
   - **/api**: API layer for handling HTTP requests.
   - **/core**: Core business logic and domain models.
   - **/utils**: Utility functions for data loading and AI model operations.
+  - **/dashboard**: Flask application for the UI dashboard.
 
 ## Documentation Links
 
@@ -47,43 +69,6 @@ Here are the documentation links for the frameworks and libraries used in this p
 
 ## Usage
 
-Access the API at `http://localhost:8000/trade-suggestions` to get trade suggestions.
-
-## Testing
-
-Tests are located in the `/tests` directory. Run tests using:
-# Stock Trading Application
-
-## Architecture
-
-This application follows the Clean Code Architecture pattern, which is divided into four layers:
-- **Entities**: Contains the business logic related to the Stock entity.
-- **Use Cases**: Contains the business rules for generating trade suggestions.
-- **Interface Adapters**: Handles interaction with external systems like the Dhan API.
-- **Frameworks & Drivers**: The entry point for the application, handling HTTP requests and responses.
-
-## Setup
-
-1. Clone the repository.
-2. Install dependencies using `pip install -r requirements.txt`.
-3. Run the application using `make run-server`.
-
-## Makefile and Docker Compose
-
-- Use the Makefile to run different services.
-- Use Docker Compose to set up MongoDB.
-
-
-## API Documentation
-
-The API is documented using OpenAPI standards. You can access the API documentation by visiting `http://localhost:8000/docs` after starting the server.
-
-## UI Dashboard
-
-A UI dashboard is available to view the forecast vs actual tracking. Access it by visiting `http://localhost:8080` after starting the services.
-
-## Usage
-
 ### Starting Services
 
 To start all services, use the provided shell script:
@@ -93,7 +78,33 @@ To start all services, use the provided shell script:
 ```
 
 Access the API at `http://localhost:8000/trade-suggestions` to get trade suggestions.
+Access the UI dashboard at `http://localhost:8080`.
+
+## API Documentation
+
+The API is documented using OpenAPI standards. You can access the API documentation by visiting `http://localhost:8000/docs` after starting the server.
+
+## UI Dashboard
+
+A UI dashboard is available to view the forecast vs actual tracking. It displays stock price charts and trade suggestions.
 
 ## Testing
 
-Tests are located in the `/tests` directory. Run tests using:
+Tests are located in the `/tests` directory. Run tests using the appropriate testing framework.
+
+## Technologies Used
+
+- FastAPI: Backend API framework
+- Flask: UI Dashboard
+- Kafka: Queue system for data pipeline
+- PostgreSQL: Database for storing stock data and predictions
+- Keras, Prophet, Ray: AI and machine learning libraries
+- Plotly: Data visualization
+
+## Contributing
+
+Please read our contributing guidelines before submitting pull requests.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
