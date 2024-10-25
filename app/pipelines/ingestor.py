@@ -1,33 +1,30 @@
 import pandas as pd
-from kafka import KafkaConsumer
-from app.core.use_cases.fetch_and_ingest import ingest_data_to_postgres
+from app.connectors.kafka_connector import KafkaConnector
+from app.core.use_cases.fetch_and_ingest import FetchAndIngestUseCase
+from app.core.repositories.stock_repository import StockRepository
 
 class QueueConsumer:
-    def __init__(self, queue_name):
-        self.queue_name = queue_name
-        self.consumer = KafkaConsumer(
-            self.queue_name,
-            bootstrap_servers='localhost:9092',
-            auto_offset_reset='earliest',
-            enable_auto_commit=True,
-            group_id='my-group'
-        )
+    def __init__(self, topic: str, group_id: str):
+        self.topic = topic
+        self.group_id = group_id
+        self.kafka_connector = KafkaConnector()
+        self.stock_repository = StockRepository()
+        self.fetch_and_ingest_use_case = FetchAndIngestUseCase(self.stock_repository)
 
     def consume(self, process_message):
-        print(f'Waiting for messages on {self.queue_name}. To exit press CTRL+C')
-        for message in self.consumer:
-            process_message(message.value)
+        print(f'Waiting for messages on {self.topic}. To exit press CTRL+C')
+        self.kafka_connector.consume(self.topic, self.group_id, process_message)
 
-    def consume_and_process(self, callback):
-        def process_message(message):
-            dataframe = pd.read_json(message)
-            callback(dataframe)
-        
-        self.consume(process_message)
+    def consume_and_process(self):
+        self.kafka_connector.consume_and_process(self.topic, self.group_id, self.process_data)
 
-def start_consuming():
-    consumer = QueueConsumer('task_queue')
-    consumer.consume_and_process(lambda df: ingest_data_to_postgres(df, 'your_table_name'))
+    def process_data(self, df: pd.DataFrame):
+        symbol = df['symbol'].iloc[0]  # Assuming the dataframe contains a 'symbol' column
+        self.fetch_and_ingest_use_case.fetch_and_ingest_stock_data(symbol, df)
+
+def main():
+    consumer = QueueConsumer('stock_data', 'stock_ingestor_group')
+    consumer.consume_and_process()
 
 if __name__ == "__main__":
-    start_consuming()
+    main()

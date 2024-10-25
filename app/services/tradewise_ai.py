@@ -1,13 +1,18 @@
 import pandas as pd
 import numpy as np
-from utils.forecasting import lstm_forecast, forecast_timeseries
-from core.domain.models import DetailedTradeSuggestion
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 from ta.trend import MACD
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
 import gym
 from gym import spaces
+from transformers import pipeline
+from prophet import Prophet
+from keras.models import Sequential
+from keras.layers import Dense, LSTM
+from sklearn.preprocessing import MinMaxScaler
 
 class StockTradingEnv(gym.Env):
     def __init__(self, data):
@@ -53,189 +58,148 @@ class StockTradingEnv(gym.Env):
         obs = self._next_observation()
         return obs, reward, done, {}
 
-def create_env(data):
-    return StockTradingEnv(data)
+class TradewiseAI:
+    def __init__(self):
+        self.sentiment_pipeline = pipeline("sentiment-analysis")
 
-def train_agent(env, n_estimators=100, random_state=42):
-    model = RandomForestRegressor(n_estimators=n_estimators, random_state=random_state)
-    training_data = []
-    training_labels = []
+    def create_env(self, data):
+        return StockTradingEnv(data)
 
-    for _ in range(1000):  # Run 1000 episodes
+    def train_agent(self, env, n_estimators=100, random_state=42):
+        model = RandomForestRegressor(n_estimators=n_estimators, random_state=random_state)
+        training_data = []
+        training_labels = []
+
+        for _ in range(1000):  # Run 1000 episodes
+            obs = env.reset()
+            done = False
+            while not done:
+                action = env.action_space.sample()  # Random action for data collection
+                next_obs, reward, done, _ = env.step(action)
+                training_data.append(obs)
+                training_labels.append(reward)
+                obs = next_obs
+
+        model.fit(training_data, training_labels)
+        return model
+
+    def generate_trade_suggestions(self, data: pd.DataFrame) -> list:
+        # Prepare features
+        macd = MACD(close=data['close'])
+        rsi = RSIIndicator(close=data['close'])
+        bb = BollingerBands(close=data['close'])
+
+        data['macd'] = macd.macd()
+        data['rsi'] = rsi.rsi()
+        data['bb_high'] = bb.bollinger_hband()
+        data['bb_low'] = bb.bollinger_lband()
+
+        env = self.create_env(data)
+        model = self.train_agent(env)
+
+        suggestions = []
         obs = env.reset()
-        done = False
-        while not done:
-            action = env.action_space.sample()  # Random action for data collection
-            next_obs, reward, done, _ = env.step(action)
-            training_data.append(obs)
-            training_labels.append(reward)
-            obs = next_obs
+        for _ in range(5):  # Generate suggestions for the next 5 steps
+            action = model.predict([obs])[0]
+            if action == 1:
+                suggestions.append({"action": "BUY", "price": data['close'].iloc[env.current_step], "confidence": 0.8})
+            elif action == 2:
+                suggestions.append({"action": "SELL", "price": data['close'].iloc[env.current_step], "confidence": 0.8})
+            obs, _, done, _ = env.step(action)
+            if done:
+                break
 
-    model.fit(training_data, training_labels)
-    return model
+        return suggestions
 
-def generate_trade_suggestions(data: pd.DataFrame) -> list:
-    # Prepare features
-    macd = MACD(close=data['close'])
-    rsi = RSIIndicator(close=data['close'])
-    bb = BollingerBands(close=data['close'])
+    def train_prediction_model(self, data):
+        data['lag_1'] = data['close'].shift(1)
+        data['lag_2'] = data['close'].shift(2)
+        data.dropna(inplace=True)
 
-    data['macd'] = macd.macd()
-    data['rsi'] = rsi.rsi()
-    data['bb_high'] = bb.bollinger_hband()
-    data['bb_low'] = bb.bollinger_lband()
+        X = data[['lag_1', 'lag_2', 'sentiment_score']]
+        y = data['close']
 
-    env = create_env(data)
-    model = train_agent(env)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    suggestions = []
-    obs = env.reset()
-    for _ in range(5):  # Generate suggestions for the next 5 steps
-        action = model.predict([obs])[0]
-        if action == 1:
-            suggestions.append(DetailedTradeSuggestion(action="BUY", price=data['close'].iloc[env.current_step], confidence=0.8))
-        elif action == 2:
-            suggestions.append(DetailedTradeSuggestion(action="SELL", price=data['close'].iloc[env.current_step], confidence=0.8))
-        obs, _, done, _ = env.step(action)
-        if done:
-            break
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
 
-    return suggestions
-# AI model utilities
+        predictions = model.predict(X_test)
+        mse = mean_squared_error(y_test, predictions)
+        print(f"Model Mean Squared Error: {mse}")
 
-def train_model(data):
-    # Implement model training logic
-    pass
+        return model
 
+    def generate_predictions(self, model, data):
+        data['predictions'] = model.predict(data[['lag_1', 'lag_2', 'sentiment_score']])
+        return data
 
+    def analyze_sentiment(self, news_articles):
+        sentiments = [self.sentiment_pipeline(article)[0] for article in news_articles]
+        return sentiments
 
-from prophet import Prophet
-import pandas as pd
-from keras.models import Sequential
-import numpy as np
-from keras.layers import Dense, LSTM
-from sklearn.preprocessing import MinMaxScaler
+    def get_sentiment_scores(self, data):
+        data['sentiment_score'] = self.analyze_sentiment(data['news'])
+        return data
 
-def forecast_timeseries(data):
-    df = pd.DataFrame(data)
-    df.columns = ['ds', 'y']
-    model = Prophet()
-    model.fit(df)
-    future = model.make_future_dataframe(periods=365)
-    forecast = model.predict(future)
-    return forecast[['ds', 'yhat']]
+    def forecast_timeseries(self, data):
+        df = pd.DataFrame(data)
+        df.columns = ['ds', 'y']
+        model = Prophet()
+        model.fit(df)
+        future = model.make_future_dataframe(periods=365)
+        forecast = model.predict(future)
+        return forecast[['ds', 'yhat']]
 
-def lstm_forecast(data, look_back=1):
-    # Prepare data
-    data = data[['y']].values
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    data = scaler.fit_transform(data)
+    def lstm_forecast(self, data, look_back=1):
+        data = data[['y']].values
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        data = scaler.fit_transform(data)
 
-    # Create dataset
-    def create_dataset(data, look_back=1):
-        X, Y = [], []
-        for i in range(len(data) - look_back - 1):
-            a = data[i:(i + look_back), 0]
-            X.append(a)
-            Y.append(data[i + look_back, 0])
-        return np.array(X), np.array(Y)
+        def create_dataset(data, look_back=1):
+            X, Y = [], []
+            for i in range(len(data) - look_back - 1):
+                a = data[i:(i + look_back), 0]
+                X.append(a)
+                Y.append(data[i + look_back, 0])
+            return np.array(X), np.array(Y)
 
-    X, Y = create_dataset(data, look_back)
-    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+        X, Y = create_dataset(data, look_back)
+        X = np.reshape(X, (X.shape[0], X.shape[1], 1))
 
-    # Build LSTM model
-    model = Sequential()
-    model.add(LSTM(50, input_shape=(look_back, 1)))
-    model.add(Dense(1))
-    model.compile(loss='mean_squared_error', optimizer='adam')
-    model.fit(X, Y, epochs=10, batch_size=1, verbose=2)
+        model = Sequential()
+        model.add(LSTM(50, input_shape=(look_back, 1)))
+        model.add(Dense(1))
+        model.compile(loss='mean_squared_error', optimizer='adam')
+        model.fit(X, Y, epochs=10, batch_size=1, verbose=2)
 
-    # Make predictions
-    predictions = model.predict(X)
-    predictions = scaler.inverse_transform(predictions)
-    return predictions
-# Forecasting utilities
+        predictions = model.predict(X)
+        predictions = scaler.inverse_transform(predictions)
+        return predictions
 
-def forecast(data):
-    # Implement forecasting logic
-    pass
+    def calculate_moving_average(self, data: pd.Series, window: int) -> pd.Series:
+        """
+        Calculate the simple moving average for a given window.
 
+        :param data: Pandas Series containing the price data
+        :param window: The number of periods to use for the moving average
+        :return: Pandas Series containing the moving average values
+        """
+        return data.rolling(window=window).mean()
 
+    def calculate_exponential_moving_average(self, data: pd.Series, window: int) -> pd.Series:
+        """
+        Calculate the exponential moving average for a given window.
 
+        :param data: Pandas Series containing the price data
+        :param window: The number of periods to use for the exponential moving average
+        :return: Pandas Series containing the exponential moving average values
+        """
+        return data.ewm(span=window, adjust=False).mean()
 
+def main():
+    ai = TradewiseAI()
+    # Add example usage here
 
-import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-
-def train_prediction_model(data):
-    """
-    Train a prediction model using RandomForestRegressor.
-
-    :param data: DataFrame containing features and target variable.
-    :return: Trained model.
-    """
-    # Example feature engineering
-    data['lag_1'] = data['close'].shift(1)
-    data['lag_2'] = data['close'].shift(2)
-    data.dropna(inplace=True)
-
-    X = data[['lag_1', 'lag_2', 'sentiment_score']]
-    y = data['close']
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-
-    predictions = model.predict(X_test)
-    mse = mean_squared_error(y_test, predictions)
-    print(f"Model Mean Squared Error: {mse}")
-
-    return model
-
-def generate_predictions(model, data):
-    """
-    Generate predictions for the next 2 days in 15-minute intervals.
-
-    :param model: Trained prediction model.
-    :param data: DataFrame containing features for prediction.
-    :return: DataFrame with predictions.
-    """
-    data['predictions'] = model.predict(data[['lag_1', 'lag_2', 'sentiment_score']])
-    return data
-# Prediction utilities
-
-def predict(data):
-    # Implement prediction logic
-    pass
-
-
-from transformers import pipeline
-
-def analyze_sentiment(news_articles):
-    """
-    Analyze sentiment of news articles using a pre-trained language model.
-
-    :param news_articles: List of news articles.
-    :return: List of sentiment scores.
-    """
-    sentiment_pipeline = pipeline("sentiment-analysis")
-    sentiments = [sentiment_pipeline(article)[0] for article in news_articles]
-    return sentiments
-
-def get_sentiment_scores(data):
-    """
-    Get sentiment scores for a DataFrame containing news articles.
-
-    :param data: DataFrame with a 'news' column.
-    :return: DataFrame with an additional 'sentiment_score' column.
-    """
-    data['sentiment_score'] = analyze_sentiment(data['news'])
-    return data
-# Sentiment analysis utilities
-
-def analyze_sentiment(text):
-    # Implement sentiment analysis logic
-    pass
+if __name__ == "__main__":
+    main()

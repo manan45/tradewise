@@ -1,27 +1,23 @@
-import json
 import pandas as pd
-from kafka import KafkaProducer
+from app.connectors.kafka_connector import KafkaConnector
 
 class QueueProducer:
-    def __init__(self, queue_name):
-        self.queue_name = queue_name
-        self.producer = KafkaProducer(bootstrap_servers='localhost:9092')
+    def __init__(self, topic: str):
+        self.topic = topic
+        self.kafka_connector = KafkaConnector()
 
     def produce(self, message):
-        self.producer.send(self.queue_name, value=message.encode('utf-8'))
-        self.producer.flush()
-        print(f"Sent message to {self.queue_name}")
+        self.kafka_connector.produce(self.topic, message)
+        print(f"Sent message to {self.topic}")
 
-    def produce_dataframe(self, dataframe):
-        for index, row in dataframe.iterrows():
-            message = row.to_json()
-            self.produce(message)
+    def produce_dataframe(self, dataframe: pd.DataFrame):
+        self.kafka_connector.produce_dataframe(self.topic, dataframe)
 
     def close(self):
-        self.producer.close()
+        self.kafka_connector.close()
 
-if __name__ == "__main__":
-    producer = QueueProducer('task_queue')
+def main():
+    producer = QueueProducer('stock_data')
     try:
         # Example usage
         producer.produce('Hello World!')
@@ -31,3 +27,6 @@ if __name__ == "__main__":
         producer.produce_dataframe(df)
     finally:
         producer.close()
+
+if __name__ == "__main__":
+    main()
