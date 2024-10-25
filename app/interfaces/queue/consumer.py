@@ -8,6 +8,7 @@ class QueueConsumer:
         # Implement message consumption logic and call the callback with the message
         pass
 import pandas as pd
+from kafka import KafkaConsumer
 
 class QueueConsumer:
     def __init__(self, queue_name):

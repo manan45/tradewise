@@ -8,6 +8,7 @@ class QueueProducer:
         # Implement message production logic
         pass
 import json
+from kafka import KafkaProducer
 
 class QueueProducer:
     def __init__(self, queue_name):

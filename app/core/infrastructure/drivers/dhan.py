@@ -1,3 +1,4 @@
+import requests
 # Dhan API driver implementation
 
 class DhanAPI:
