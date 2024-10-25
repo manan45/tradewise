@@ -5,6 +5,7 @@ import websocket
 import json
 import threading
 import os
+import logging
 
 class DhanAPI:
     def __init__(self):
@@ -14,6 +15,7 @@ class DhanAPI:
         )
         self.ws = None
         self.thread = None
+        logging.basicConfig(level=logging.INFO)
 
     @retry(wait=wait_fixed(2), stop=stop_after_attempt(5))
     def fetch_stock_data(self, symbol, interval):
@@ -71,20 +73,20 @@ class DhanAPI:
 
     def on_message(self, ws, message):
         data = json.loads(message)
-        print(f"Received data: {data}")
-        # Process the data as needed
+        logging.info(f"Received data: {data}")
+        # TODO: Process the data as needed
 
     def on_error(self, ws, error):
-        print(f"Error: {error}")
+        logging.error(f"Error: {error}")
 
     def on_close(self, ws, close_status_code, close_msg):
-        print("### closed ###")
+        logging.info("WebSocket connection closed")
 
     def on_open(self, ws):
-        print("Opened connection")
+        logging.info("WebSocket connection opened")
 
     def connect_websocket(self):
-        # websocket.enableTrace(True)
+        websocket.enableTrace(True)
         self.ws = websocket.WebSocketApp(
             f"wss://api-feed.dhan.co?version=2&token={self.client.access_token}&clientId={self.client.client_id}&authType=2",
             on_message=self.on_message,
@@ -103,20 +105,26 @@ class DhanAPI:
     def disconnect_websocket(self):
         if self.ws:
             self.ws.close()
+            self.ws = None
         if self.thread:
             self.thread.join()
+            self.thread = None
 
     def subscribe_symbols(self, symbols):
         if self.ws and self.ws.sock and self.ws.sock.connected:
-            subscribe_message = {
-                "action": "subscribe",
-                "params": {
-                    "symbols": symbols
+            try:
+                subscribe_message = {
+                    "action": "subscribe",
+                    "params": {
+                        "symbols": symbols
+                    }
                 }
-            }
-            self.ws.send(json.dumps(subscribe_message))
+                self.ws.send(json.dumps(subscribe_message))
+                logging.info(f"Subscribed to symbols: {symbols}")
+            except Exception as e:
+                logging.error(f"Failed to subscribe to symbols: {e}")
         else:
-            print("WebSocket is not connected. Cannot subscribe to symbols.")
+            logging.warning("WebSocket is not connected. Cannot subscribe to symbols.")
 
 # Usage example
 dhan_api = DhanAPI()
