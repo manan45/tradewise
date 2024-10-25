@@ -1,4 +1,5 @@
 from kafka import KafkaConsumer
+from app.core.use_cases.fetch_and_ingest import ingest_data_to_postgres
 
 def start_consuming():
     consumer = KafkaConsumer(
@@ -10,7 +11,8 @@ def start_consuming():
     )
     print('Waiting for messages. To exit press CTRL+C')
     for message in consumer:
-        print(f"Received {message.value.decode('utf-8')}")
+        data = message.value.decode('utf-8')
+        ingest_data_to_postgres(data, 'your_table_name')
 
 if __name__ == "__main__":
     start_consuming()

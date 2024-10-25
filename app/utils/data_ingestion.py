@@ -31,3 +31,9 @@ def fetch_real_time_data():
     combined_data = pd.concat([news_data, oi_data], axis=1)
     combined_data['timestamp'] = datetime.now()
     return combined_data
+from queue.producer import send_message
+
+def fetch_data_from_api(api_url):
+    # Fetch data logic
+    data = ...  # Assume data is fetched
+    send_message(data)

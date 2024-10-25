@@ -26,3 +26,6 @@ async def fetch_and_ingest_index_data():
 
 if __name__ == "__main__":
     asyncio.run(fetch_and_ingest_index_data())
+def ingest_data_to_postgres(data, table_name):
+    # Logic to store data in Postgres
+    pass
