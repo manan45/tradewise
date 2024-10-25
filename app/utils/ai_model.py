@@ -36,48 +36,52 @@ def train_agent():
 
 
 def generate_trade_suggestions(data: pd.DataFrame) -> list:
-    # Add additional parameters
-    data['volume_change'] = data['volume'].pct_change()
-    data['price_change'] = data['close'].pct_change()
-    data['day_of_week'] = data['date'].dt.dayofweek
-    data['is_month_end'] = data['date'].dt.is_month_end
-    # Add more parameters as needed
-    data = data.reset_index(drop=True)
-
-    # Check if the DataFrame is empty
-    if data.empty:
-        print("Error: Input DataFrame is empty.")
-        return []
-
-    # Feature engineering with additional parameters
+    # Prepare features
     data['returns'] = data['close'].pct_change()
-    data['ema_9'] = data['close'].ewm(span=9, adjust=False).mean()
-    data['ema_12'] = data['close'].ewm(span=12, adjust=False).mean()
-    data['ema_15'] = data['close'].ewm(span=15, adjust=False).mean()
-    data['ema_26'] = data['close'].ewm(span=26, adjust=False).mean()
+    data['sma_5'] = data['close'].rolling(window=5).mean()
+    data['sma_20'] = data['close'].rolling(window=20).mean()
     
-    # MACD
-    macd = MACD(close=data['close'])
-    data['macd'] = macd.macd()
-    data['signal_line'] = macd.macd_signal()
+    # Drop NaN values
+    data = data.dropna()
     
-    # RSI
-    rsi = RSIIndicator(close=data['close'])
-    data['rsi'] = rsi.rsi()
+    # Prepare features and target
+    features = ['open', 'high', 'low', 'close', 'volume', 'returns', 'sma_5', 'sma_20', 'news_sentiment']
+    X = data[features]
+    y = data['close'].shift(-1)  # Predict next day's close price
     
-    # Bollinger Bands
-    bb = BollingerBands(close=data['close'])
-    data['upper_band'] = bb.bollinger_hband()
-    data['lower_band'] = bb.bollinger_lband()
+    # Remove the last row as we don't have the next day's price for it
+    X = X[:-1]
+    y = y[:-1]
     
-    # Combine LSTM and Prophet predictions
-    lstm_predictions = lstm_forecast(data[['date', 'close']])
-    prophet_predictions = forecast_timeseries(data[['date', 'close']])
-    combined_predictions = (lstm_predictions + prophet_predictions['yhat'].values) / 2
-    data['sma_50'] = data['close'].rolling(window=50).mean()
-    data['sma_200'] = data['close'].rolling(window=200).mean()
+    # Train the model
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X, y)
     
-    # Stochastic Oscillator
-    data['lowest_low'] = data['low'].rolling(window=14).min()
-    data['highest_high'] = data['high'].rolling(window=14).max()
+    # Make predictions for the next day
+    last_data = X.iloc[-1].values.reshape(1, -1)
+    prediction = model.predict(last_data)[0]
+    
+    # Generate trade suggestion
+    current_price = data['close'].iloc[-1]
+    action = "BUY" if prediction > current_price else "SELL"
+    confidence = abs(prediction - current_price) / current_price
+    
+    suggestion = DetailedTradeSuggestion(
+        action=action,
+        price=prediction,
+        confidence=confidence,
+        stop_loss=min(data['low'].iloc[-5:]),
+        order_limit=max(data['high'].iloc[-5:]),
+        max_risk=0.02 * current_price,
+        max_reward=0.05 * current_price,
+        open=data['open'].iloc[-1],
+        high=data['high'].iloc[-1],
+        low=data['low'].iloc[-1],
+        close=current_price
+    )
+    
+    return [suggestion]
 
+def train_agent():
+    # Placeholder for future implementation
+    pass
