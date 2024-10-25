@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import List
 from app.core.domain.models import DetailedTradeSuggestion
 from app.core.use_cases.trade_suggestions import TradeSuggestions
+from app.core.domain.services.trade_suggestions_service import TradeSuggestionsService
 from app.core.infrastructure.repositories.stock_repository import StockRepository
 from app.core.database import get_db_session
 
