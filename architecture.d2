@@ -1,9 +1,25 @@
 external: External Data API
 
+data_pipeline: Data Engineering {
+  fetcher
+  queue
+  consumer
+}
+
+ml_engineering: Machine Learning Engineering {
+  trainer
+  model
+}
+
+application_layer: Application Layer {
+  backend
+  ui
+}
+
 fetcher: Data Fetcher
 
 queue: Kafka {
-  shape: cylinder
+  shape: queue
 }
 
 consumer: Data consumer
@@ -21,15 +37,15 @@ postgres: Postgres {
   icon.near: bottom-center
 }
 
-ui -> backend: fetch data analytics
-backend -> model: generate trade suggestions
-backend -> postgres: fetch data from database
+application_layer.ui -> application_layer.backend: fetch data analytics
+application_layer.backend -> ml_engineering.model: generate trade suggestions
+application_layer.backend -> postgres: fetch data from database
 
-fetcher -> external: fetch trader data
-fetcher -> queue: send data to queue
-queue -> consumer: send data to consumer
-consumer -> postgres: insert data in postgres
+data_pipeline.fetcher -> external: fetch trader data
+data_pipeline.fetcher -> data_pipeline.queue: send data to queue
+data_pipeline.queue -> data_pipeline.consumer: send data to consumer
+data_pipeline.consumer -> postgres: insert data in postgres
 
-trainer -> postgres: read the data from postgres
-trainer -> model: train the model
-model -> postgres: update the forecast
+ml_engineering.trainer -> postgres: read the data from postgres
+ml_engineering.trainer -> ml_engineering.model: train the model
+ml_engineering.model -> postgres: update the forecast
