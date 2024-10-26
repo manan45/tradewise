@@ -23,7 +23,7 @@ services:
     environment:
       POSTGRES_USER: "${DB_USER:-postgres}"
       POSTGRES_PASSWORD: "${DB_PASSWORD:-password}"
-      POSTGRES_DB: "${DB_NAME:-tradewise}"
+      POSTGRES_DB: "${DB_NAME:-stockdb}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:

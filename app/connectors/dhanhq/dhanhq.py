@@ -867,7 +867,15 @@ class dhanhq:
                 raise Exception("interval value must be ['1','5','15','25','60']")
             
             payload = json_dumps(payload)
-            response = self.session.post(url, headers=self.header, timeout=self.timeout, data=payload)
+            print(payload)
+            print(url)
+            print(self.header)
+            print(self.timeout)
+
+            response = self.session.post(url, headers={
+                **self.header,
+                'client-id': self.client_id
+                }, timeout=self.timeout, data=payload)
             return self._parse_response(response)
         except Exception as e:
             logging.error('Exception in dhanhq>>intraday_minute_data: %s', e)

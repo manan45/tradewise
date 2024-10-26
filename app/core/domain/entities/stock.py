@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import List, Optional
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, Sequence
 from sqlalchemy.orm import relationship
 from .base import Base
 
@@ -41,7 +41,7 @@ class Stock:
 class StockModel(Base):
     __tablename__ = 'stocks'
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Sequence('stocks_id_seq'), primary_key=True)
     symbol = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=False)
     current_price = Column(Numeric(10, 2), nullable=False)
@@ -51,7 +51,7 @@ class StockModel(Base):
 class StockPriceModel(Base):
     __tablename__ = 'stock_prices'
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Sequence('stock_prices_id_seq'), primary_key=True)
     stock_symbol = Column(String, ForeignKey('stocks.symbol'), nullable=False)
     open = Column(Numeric(10, 2), nullable=False)
     high = Column(Numeric(10, 2), nullable=False)

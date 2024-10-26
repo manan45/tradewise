@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Union, Dict
 from decimal import Decimal
+from datetime import datetime
 from ..entities.stock import Stock, StockPrice
 
 class StockRepositoryInterface(ABC):
@@ -92,5 +93,19 @@ class StockRepositoryInterface(ABC):
 
         Returns:
             A list of StockPrice objects representing the price history for the stock.
+        """
+        pass
+
+    @abstractmethod
+    async def add_price_history_bulk(self, symbol: str, price_data_list: List[StockPrice]) -> bool:
+        """
+        Add price history for a specific stock in bulk.
+
+        Args:
+            symbol (str): The unique symbol identifier for the stock.
+            price_data_list (List[StockPrice]): A list of StockPrice objects to add.
+
+        Returns:
+            Boolean indicating whether the addition was successful.
         """
         pass

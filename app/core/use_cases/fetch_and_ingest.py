@@ -22,7 +22,7 @@ class FetchAndIngestUseCase:
             raise
 
     def aggregate_and_ingest(self, dataframe: pd.DataFrame, table_name: str):
-        timeframes = ['1min', '2min', '5min', '15min', '30min', '1H', '2H', '4H', 'D', 'W', 'M', 'Y']
+        timeframes = ['1min', '2min', '5min', '15min', '30min', '1H', '2H', '4H', 'D', 'W', 'M', 'YE']  # Changed 'Y' to 'YE'
         
         if 'timestamp' not in dataframe.columns:
             raise ValueError("Dataframe must contain a 'timestamp' column")

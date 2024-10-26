@@ -54,10 +54,14 @@ class PostgresClient:
     def run_migrations(self):
         try:
             self.logger.info("Running database migrations...")
-            alembic_cfg = alembic.config.Config("alembic.ini")
-            script_location = os.path.join(os.path.dirname(__file__), '..', '..', 'migrations')
-            alembic_cfg.set_main_option('script_location', script_location)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
+            alembic_ini_path = os.path.join(project_root, 'alembic.ini')
+            
+            alembic_cfg = Config(alembic_ini_path)
+            alembic_cfg.set_main_option("script_location", os.path.join(project_root, "migrations"))
             alembic_cfg.set_main_option("sqlalchemy.url", self._get_database_url())
+            
             alembic.command.upgrade(alembic_cfg, "head")
             self.logger.info("Database migrations completed successfully.")
         except Exception as e:

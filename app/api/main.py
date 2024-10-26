@@ -12,7 +12,9 @@ from app.core.repositories.stock_repository import StockRepository
 from app.connectors.postgres_client import postgres_client, get_db
 from app.core.domain.models.trade_suggestion_request import TradeSuggestionRequest
 from sqlalchemy.orm import Session
-from app.connectors.stock_app_apple import AppleStocksConnector
+from app.connectors.yahoo_finance import AppleStocksConnector
+from app.core.use_cases.fetch_option_data import FetchOptionDataUseCase
+from datetime import datetime
 
 load_dotenv()
 
@@ -69,6 +71,15 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         print("WebSocket disconnected")
 
+@app.get("/api/option-data/{symbol}")
+async def get_option_data(symbol: str, expiry_date: str):
+    stock_repository = StockRepository()
+    fetch_option_data_use_case = FetchOptionDataUseCase(stock_repository)
+    expiry = datetime.strptime(expiry_date, "%Y-%m-%d")
+    
+    option_data = await fetch_option_data_use_case.execute(symbol, expiry)
+    
+    return option_data
 
 if __name__ == "__main__":
     import uvicorn

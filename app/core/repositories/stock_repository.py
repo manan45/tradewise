@@ -4,9 +4,10 @@ from sqlalchemy import update, delete, insert
 from app.core.domain.repositories.stock_repository_interface import StockRepositoryInterface
 from app.core.domain.entities.stock import Stock, StockPrice, StockModel, StockPriceModel
 from app.connectors.postgres_client import postgres_client
-from typing import List, Optional
+from typing import List, Optional, Union, Dict
 from decimal import Decimal
 from datetime import datetime, timedelta
+from sqlalchemy.exc import SQLAlchemyError
 
 class StockRepository(StockRepositoryInterface):
     async def get_all_stocks(self) -> List[Stock]:
@@ -47,6 +48,51 @@ class StockRepository(StockRepositoryInterface):
             session.commit()
             return result.rowcount > 0
 
+    async def add_price_history_bulk(self, symbol: str, price_data_list: List[StockPrice]) -> bool:
+        if not await self.ensure_stock_exists(symbol):
+            return False
+
+        with postgres_client.get_session() as session:
+            try:
+                stock_price_models = [
+                    StockPriceModel(
+                        stock_symbol=symbol,
+                        open=price_data.open,
+                        high=price_data.high,
+                        low=price_data.low,
+                        close=price_data.close,
+                        volume=price_data.volume,
+                        timestamp=price_data.timestamp
+                    )
+                    for price_data in price_data_list
+                ]
+                
+                session.bulk_save_objects(stock_price_models)
+                session.commit()
+                print(f"Successfully added {len(stock_price_models)} price history records for stock {symbol}")
+                return True
+            except SQLAlchemyError as e:
+                session.rollback()
+                print(f"Error adding price history bulk for {symbol}: {str(e)}")
+                return False
+
+    async def get_price_history(self, symbol: str, start_date: datetime, end_date: datetime) -> List[StockPrice]:
+        with postgres_client.get_session() as session:
+            result = session.execute(
+                select(StockPriceModel)
+                .filter(StockPriceModel.stock_symbol == symbol)
+                .filter(StockPriceModel.timestamp.between(start_date, end_date))
+                .order_by(StockPriceModel.timestamp)
+            )
+            return [StockPrice(
+                open=sp.open,
+                high=sp.high,
+                low=sp.low,
+                close=sp.close,
+                volume=sp.volume,
+                timestamp=sp.timestamp
+            ) for sp in result.scalars().all()]
+
     async def add_price_history(self, symbol: str, price_data: StockPrice) -> bool:
         with postgres_client.get_session() as session:
             stock_price_model = StockPriceModel(
@@ -62,21 +108,17 @@ class StockRepository(StockRepositoryInterface):
             session.commit()
             return True
 
-    async def get_price_history(self, symbol: str, days: int = 30) -> List[StockPrice]:
+    async def ensure_stock_exists(self, symbol: str, name: str = None) -> bool:
         with postgres_client.get_session() as session:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            result = session.execute(
-                select(StockPriceModel)
-                .filter(StockPriceModel.stock_symbol == symbol)
-                .filter(StockPriceModel.timestamp.between(start_date, end_date))
-                .order_by(StockPriceModel.timestamp)
-            )
-            return [StockPrice(
-                open=sp.open,
-                high=sp.high,
-                low=sp.low,
-                close=sp.close,
-                volume=sp.volume,
-                timestamp=sp.timestamp
-            ) for sp in result.scalars().all()]
+            stock = session.execute(select(StockModel).filter(StockModel.symbol == symbol)).scalar_one_or_none()
+            if not stock:
+                new_stock = StockModel(symbol=symbol, name=name or symbol, current_price=0)
+                session.add(new_stock)
+                try:
+                    session.commit()
+                    return True
+                except SQLAlchemyError as e:
+                    session.rollback()
+                    print(f"Error ensuring stock exists for {symbol}: {str(e)}")
+                    return False
+            return True
