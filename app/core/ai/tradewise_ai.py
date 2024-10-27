@@ -885,12 +885,35 @@ class TradewiseAI:
             # Format suggestions
             suggestions = []
             for i, forecast in enumerate(forecast_data['forecasts'], 1):
+                suggestion = {
+                    'id': i,
+                    'timestamp': forecast['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                    'Action': forecast['signals']['action'],
+                    'Summary': {
+                        'Current Price': f"${forecast['price']['current']:.2f}",
+                        'Predicted Price': f"${forecast['price']['predicted']:.2f}",
+                        'Expected Change': f"{((forecast['price']['predicted'] / forecast['price']['current']) - 1) * 100:.2f}%",
+                        'Confidence': f"{forecast['signals']['confidence'] * 100:.1f}%"
+                    },
+                    'Technical Analysis': {
+                        'RSI': f"{forecast['indicators']['rsi']:.1f}",
+                        'Signal Strength': f"{forecast['signals']['strength']:.2f}",
+                        'Volatility': f"{forecast['price']['volatility']:.2f}",
+                    },
+                    'Volume Analysis': {
+                        'Trend': forecast['volume']['trend'],
+                        'Strength': f"{forecast['volume']['strength'] * 100:.1f}%"
+                    },
+                    'Support/Resistance': {
+                        'Support': f"${forecast['price']['support']:.2f}",
+                        'Resistance': f"${forecast['price']['resistance']:.2f}"
+                    }
+                }
+
                 if sentiment_score > 0.5:
                     suggestion['Action'] = 'BUY'
                 elif sentiment_score < -0.5:
                     suggestion['Action'] = 'SELL'
-
-                suggestion = {
                     'id': i,
                     'timestamp': forecast['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
                     'Action': forecast['signals']['action'],
@@ -966,6 +989,7 @@ class TradewiseAI:
                         dummy_features = np.zeros((1, len(self.features)))
                         dummy_features[0, 0] = base_pred
                         pred_price = max(float(self.scaler.inverse_transform(dummy_features)[0][0]), 0.01)
+                        scaled_prev_pred = base_pred
                     else:
                         X = np.roll(X, -1, axis=1)
                         X[0, -1] = scaled_prev_pred
