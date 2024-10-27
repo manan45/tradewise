@@ -226,22 +226,22 @@ class TechnicalIndicatorCalculator:
     
     def _calculate_fibonacci_levels(self, df: pd.DataFrame):
         """Calculate Fibonacci retracement levels"""
-        # high = df['high'].rolling(window=20).max()
-        # low = df['low'].rolling(window=20).min()
-        # diff = high - low
+        high = df['high'].rolling(window=20).max()
+        low = df['low'].rolling(window=20).min()
+        diff = high - low
         
-        # # Standard Fibonacci levels
-        # fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
-        # for level in fib_levels:
-        #     df[f'fib_{int(level*100)}'] = low + level * diff
+        # Standard Fibonacci levels
+        fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
+        for level in fib_levels:
+            df[f'fib_{int(level*100)}'] = low + level * diff
         
-        # # Calculate distance to closest Fibonacci level
-        # def find_closest_fib(row):
-        #     levels = [row[f'fib_{int(level*100)}'] for level in fib_levels]
-        #     return min(levels, key=lambda x: abs(x - row['close']))
+        # Calculate distance to closest Fibonacci level
+        def find_closest_fib(row):
+            levels = [row[f'fib_{int(level*100)}'] for level in fib_levels]
+            return min(levels, key=lambda x: abs(x - row['close']))
         
-        # df['closest_fib'] = df.apply(find_closest_fib, axis=1)
-        # df['fib_ratio'] = self.safe_divide(df['close'] - df['fib_0'], df['fib_100'] - df['fib_0'])
+        df['closest_fib'] = df.apply(find_closest_fib, axis=1)
+        df['fib_ratio'] = self.safe_divide(df['close'] - df['fib_0'], df['fib_100'] - df['fib_0'])
     
     def _calculate_composite_indicators(self, df: pd.DataFrame):
         """Calculate custom composite indicators"""
