@@ -1,15 +1,13 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict
+from typing import Dict
 from decimal import Decimal
 
 class DetailedTradeSuggestion(BaseModel):
-    action: str = Field(...)
-    price: Decimal = Field(...)
-    confidence: float = Field(...)
-    stop_loss: Decimal = Field(...)
-    order_limit: Decimal = Field(...)
-    max_risk: Decimal = Field(...)
-    max_reward: Decimal = Field(...)
-    open: Decimal = Field(...)
-    high: Decimal = Field(...)
-    low: Decimal = Field(...)
-    close: Decimal = Field(...)
+    model_config = ConfigDict(populate_by_name=True)
+
+    Suggestion: str
+    Action: str
+    Summary: Dict[str, str]
+    Risk_Management: Dict[str, str]
+    Technical_Analysis: Dict[str, str]
+    Forecast_Time: str

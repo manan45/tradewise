@@ -1,7 +1,7 @@
 import unittest
 import pandas as pd
 import numpy as np
-from app.services.tradewise_ai import TradewiseAI
+from app.core.ai.tradewise_ai import TradewiseAI
 
 class TestTradewiseAI(unittest.TestCase):
     def setUp(self):

@@ -80,8 +80,12 @@ services:
       dockerfile: infra/docker/Dockerfile.training_service
     depends_on:
       - db
+      - api
     env_file:
       - ../.env
+    environment:
+      - DB_HOST=postgres-db
+      - API_HOST=api
     networks:
       - app-network
 

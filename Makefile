@@ -1,4 +1,4 @@
-.PHONY: run-api run-data-service run-training-service start-services stop-services
+.PHONY: run-api run-data-service run-training-service start-services stop-services migrate train
 
 run-api:
 	uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
@@ -16,4 +16,7 @@ stop-services:
 	docker-compose -f infra/docker-compose.yml down
 
 migrate:
-	psql -h localhost -U postgres -d stockdb -f migrations/001_create_tables.sql
+	alembic upgrade head
+
+train:
+	curl -X POST http://localhost:8000/train

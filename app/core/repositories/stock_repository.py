@@ -13,14 +13,28 @@ class StockRepository(StockRepositoryInterface):
     async def get_all_stocks(self) -> List[Stock]:
         with postgres_client.get_session() as session:
             result = session.execute(select(StockModel))
-            return [Stock(symbol=s.symbol, name=s.name, current_price=s.current_price, id=s.id) for s in result.scalars().all()]
+            return [Stock(
+                symbol=s.symbol,
+                name=s.name,
+                current_price=s.current_price,
+                id=s.id,
+                predicted_price=s.predicted_price,
+                prediction_version_id=s.prediction_version_id
+            ) for s in result.scalars().all()]
 
     async def get_stock_by_symbol(self, symbol: str) -> Optional[Stock]:
         with postgres_client.get_session() as session:
             result = session.execute(select(StockModel).filter(StockModel.symbol == symbol))
             stock_model = result.scalar_one_or_none()
             if stock_model:
-                return Stock(symbol=stock_model.symbol, name=stock_model.name, current_price=stock_model.current_price, id=stock_model.id)
+                return Stock(
+                    symbol=stock_model.symbol,
+                    name=stock_model.name,
+                    current_price=stock_model.current_price,
+                    id=stock_model.id,
+                    predicted_price=stock_model.predicted_price,
+                    prediction_version_id=stock_model.prediction_version_id
+                )
             return None
 
     async def update_stock_price(self, symbol: str, price: Decimal) -> bool:
@@ -76,14 +90,18 @@ class StockRepository(StockRepositoryInterface):
                 print(f"Error adding price history bulk for {symbol}: {str(e)}")
                 return False
 
-    async def get_price_history(self, symbol: str, start_date: datetime, end_date: datetime) -> List[StockPrice]:
+    async def get_price_history(self, symbol: str, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> List[StockPrice]:
         with postgres_client.get_session() as session:
-            result = session.execute(
-                select(StockPriceModel)
-                .filter(StockPriceModel.stock_symbol == symbol)
-                .filter(StockPriceModel.timestamp.between(start_date, end_date))
-                .order_by(StockPriceModel.timestamp)
-            )
+            query = select(StockPriceModel).filter(StockPriceModel.stock_symbol == symbol)
+            
+            if start_date:
+                query = query.filter(StockPriceModel.timestamp >= start_date)
+            if end_date:
+                query = query.filter(StockPriceModel.timestamp <= end_date)
+            
+            query = query.order_by(StockPriceModel.timestamp)
+            
+            result = session.execute(query)
             return [StockPrice(
                 open=sp.open,
                 high=sp.high,

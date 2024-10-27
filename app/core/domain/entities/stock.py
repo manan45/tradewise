@@ -22,6 +22,8 @@ class Stock:
     current_price: Decimal
     price_history: List[StockPrice] = field(default_factory=list)
     id: Optional[int] = None
+    predicted_price: Optional[Decimal] = None
+    prediction_version_id: Optional[str] = None
 
     def update_price(self, new_price: Decimal) -> None:
         self.current_price = new_price
@@ -45,6 +47,8 @@ class StockModel(Base):
     symbol = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=False)
     current_price = Column(Numeric(10, 2), nullable=False)
+    predicted_price = Column(Numeric(10, 2), nullable=True)
+    prediction_version_id = Column(String(14), nullable=True)
 
     price_history = relationship("StockPriceModel", back_populates="stock")
 

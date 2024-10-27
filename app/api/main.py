@@ -4,7 +4,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from app.services.data_service import DataService
-from app.services.tradewise_ai import TradewiseAI
+from app.core.ai.tradewise_ai import TradewiseAI
 from typing import List
 from app.core.domain.models.trade_suggestion import DetailedTradeSuggestion
 from app.core.use_cases.trade_suggestions import TradeSuggestionsService, TradeSuggestionsUseCase
