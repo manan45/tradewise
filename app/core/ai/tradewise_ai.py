@@ -83,14 +83,14 @@ class TradewiseAI:
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
 
-    async def generate_trade_suggestions(self, symbol):
+    async def generate_trade_suggestions(self, symbol, start_date: datetime, end_date: datetime):
         """Generate trade suggestions with proper formatting"""
         try:
             stock = await self.stock_repository.get_stock_by_symbol(symbol)
             if not stock:
                 raise ValueError(f"Stock with symbol {symbol} not found")
             
-            price_history = await self.stock_repository.get_price_history(symbol)
+            price_history = await self.stock_repository.get_price_history(symbol, start_date, end_date)
             df = pd.DataFrame([vars(price) for price in price_history])
             
             training_data = df[:-120]
