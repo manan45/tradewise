@@ -1,20 +1,16 @@
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from app.services.data_service import DataService
-from app.core.ai.tradewise_ai import TradewiseAI
-from typing import List
-from app.core.domain.models.trade_suggestion import DetailedTradeSuggestion
-from app.core.use_cases.trade_suggestions import TradeSuggestionsService, TradeSuggestionsUseCase
-from app.core.repositories.stock_repository import StockRepository
-from app.connectors.postgres_client import postgres_client, get_db
-from app.core.domain.models.trade_suggestion_request import TradeSuggestionRequest
-from sqlalchemy.orm import Session
-from app.connectors.yahoo_finance import AppleStocksConnector
-from app.core.use_cases.fetch_option_data import FetchOptionDataUseCase
+from typing import List, Optional
 from datetime import datetime
+
+from app.core.domain.models.trade_suggestion_request import TradeSuggestionRequest
+from app.core.use_cases.trade_suggestions import TradeSuggestionsUseCase
+from app.core.repositories.stock_repository import StockRepository
+from app.core.ai.tradewise_ai import TradewiseAI, SessionStats, PredictionStats
+from app.services.data_service import DataService
 
 load_dotenv()
 
@@ -47,16 +43,73 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
+@app.post("/api/tradewise/suggestions")
+async def generate_trade_suggestions(request: TradeSuggestionRequest):
+    """Generate trade suggestions for a symbol"""
+    try:
+        stock_repository = StockRepository()
+        use_case = TradeSuggestionsUseCase(stock_repository)
+        suggestion = await use_case.generate_suggestion_for_stock(request.symbol)
+        return suggestion
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/tradewise/suggestions/top/{limit}")
+async def get_top_suggestions(limit: int = 5):
+    """Get top trade suggestions"""
+    try:
+        stock_repository = StockRepository()
+        use_case = TradeSuggestionsUseCase(stock_repository)
+        suggestions = await use_case.get_top_suggestions(limit)
+        return suggestions
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/tradewise/sessions/{session_id}")
+async def get_session_stats(session_id: Optional[str] = None):
+    """Get trading session statistics"""
+    try:
+        tradewise = TradewiseAI()
+        stats = await tradewise.get_session_stats(session_id)
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/trade-suggestions", response_model=List[DetailedTradeSuggestion])
-async def get_trade_suggestions(request: TradeSuggestionRequest, db: Session = Depends(get_db)):
-    stock_repository = StockRepository(db)
-    trade_suggestions_service = TradeSuggestionsService(stock_repository)
-    trade_suggestions = TradeSuggestionsUseCase(stock_repository, trade_suggestions_service)
-    suggestions = await trade_suggestions.generate_suggestion_for_stock(request.symbol)
-    return suggestions
+@app.get("/api/tradewise/predictions/{session_id}")
+async def get_prediction_stats(session_id: Optional[str] = None):
+    """Get prediction statistics"""
+    try:
+        tradewise = TradewiseAI()
+        stats = await tradewise.get_prediction_stats(session_id)
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tradewise/logs")
+async def get_session_logs(
+    session_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    """Get trading session logs"""
+    try:
+        tradewise = TradewiseAI()
+        logs = await tradewise.get_session_logs(session_id, start_date, end_date)
+        return logs
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tradewise/analysis/{symbol}")
+async def get_market_analysis(symbol: str):
+    """Get comprehensive market analysis for a symbol"""
+    try:
+        stock_repository = StockRepository()
+        tradewise = TradewiseAI()
+        df = await stock_repository.get_market_data(symbol)
+        analysis = tradewise._analyze_market(df)
+        return analysis
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -70,16 +123,6 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_json(suggestions[0].dict())
     except WebSocketDisconnect:
         print("WebSocket disconnected")
-
-@app.get("/api/option-data/{symbol}")
-async def get_option_data(symbol: str, expiry_date: str):
-    stock_repository = StockRepository()
-    fetch_option_data_use_case = FetchOptionDataUseCase(stock_repository)
-    expiry = datetime.strptime(expiry_date, "%Y-%m-%d")
-    
-    option_data = await fetch_option_data_use_case.execute(symbol, expiry)
-    
-    return option_data
 
 if __name__ == "__main__":
     import uvicorn

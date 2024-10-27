@@ -5,155 +5,326 @@ from ta.momentum import RSIIndicator, StochRSIIndicator, WilliamsRIndicator
 from ta.volatility import BollingerBands, AverageTrueRange, KeltnerChannel
 from ta.volume import AccDistIndexIndicator, OnBalanceVolumeIndicator, ForceIndexIndicator
 from ta.others import DailyReturnIndicator, CumulativeReturnIndicator
+from typing import List, Dict
 import warnings
 
-class TechnicalIndicatorCalculator:
-    """Advanced technical indicator calculator with comprehensive market analysis"""
+class PsychologyPatternAnalyzer:
+    """Analyzes psychological patterns in trading sessions"""
     
     def __init__(self):
-        self.epsilon = 1e-8  # Small value to avoid division by zero
-
-    def safe_divide(self, a, b):
-        return np.divide(a, b, out=np.zeros_like(a), where=b!=0)
+        self.emotional_thresholds = {
+            'extreme_fear': 0.2,
+            'extreme_greed': 0.8,
+            'balanced': (0.4, 0.6)
+        }
+        self.confidence_thresholds = {
+            'low': 0.3,
+            'high': 0.7
+        }
+        
+    def analyze(self, state_history: List[Dict], trades: List[Dict]) -> Dict:
+        """Analyze psychological patterns from session history"""
+        patterns = {
+            'emotional_patterns': self._analyze_emotional_patterns(state_history),
+            'confidence_patterns': self._analyze_confidence_patterns(state_history),
+            'decision_patterns': self._analyze_decision_patterns(state_history, trades),
+            'bias_patterns': self._analyze_bias_patterns(state_history, trades)
+        }
+        
+        return {
+            'patterns': patterns,
+            'recommendations': self._generate_recommendations(patterns)
+        }
     
-    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Calculate comprehensive technical indicators for market analysis
+    def _analyze_emotional_patterns(self, history: List[Dict]) -> Dict:
+        """Analyze emotional state patterns"""
+        emotional_states = [state['psychological_state'].get('emotional_balance', 0.5) 
+                          for state in history]
         
-        Args:
-            df: DataFrame with OHLCV data
+        # Detect emotional cycles
+        cycles = self._detect_cycles(emotional_states)
+        
+        # Analyze emotional stability
+        stability = np.std(emotional_states)
+        
+        # Detect emotional extremes
+        extremes = {
+            'fear_episodes': sum(1 for e in emotional_states if e < self.emotional_thresholds['extreme_fear']),
+            'greed_episodes': sum(1 for e in emotional_states if e > self.emotional_thresholds['extreme_greed']),
+            'balanced_periods': sum(1 for e in emotional_states 
+                                  if self.emotional_thresholds['balanced'][0] <= e <= self.emotional_thresholds['balanced'][1])
+        }
+        
+        return {
+            'cycles': cycles,
+            'stability': stability,
+            'extremes': extremes
+        }
+    
+    def _analyze_confidence_patterns(self, history: List[Dict]) -> Dict:
+        """Analyze confidence patterns"""
+        confidence_levels = [state['psychological_state'].get('confidence', 0.5) 
+                           for state in history]
+        
+        # Analyze confidence trends
+        confidence_trend = self._calculate_trend(confidence_levels)
+        
+        # Detect confidence shifts
+        shifts = self._detect_significant_shifts(confidence_levels)
+        
+        return {
+            'trend': confidence_trend,
+            'shifts': shifts,
+            'average': np.mean(confidence_levels),
+            'stability': np.std(confidence_levels)
+        }
+    
+    def _analyze_decision_patterns(self, history: List[Dict], trades: List[Dict]) -> Dict:
+        """Analyze decision-making patterns"""
+        decisions = []
+        for state, trade in zip(history, trades):
+            if trade:
+                decisions.append({
+                    'emotional_state': state['psychological_state'].get('emotional_balance', 0.5),
+                    'confidence': state['psychological_state'].get('confidence', 0.5),
+                    'outcome': trade['pnl']
+                })
+        
+        return {
+            'emotion_correlation': self._calculate_correlation([d['emotional_state'] for d in decisions],
+                                                            [d['outcome'] for d in decisions]),
+            'confidence_correlation': self._calculate_correlation([d['confidence'] for d in decisions],
+                                                               [d['outcome'] for d in decisions])
+        }
+    
+    def _detect_cycles(self, values: List[float]) -> Dict:
+        """Detect cycles in time series data"""
+        # Use FFT to detect cycles
+        if len(values) < 2:
+            return {'cycles': [], 'dominant_cycle': None}
             
-        Returns:
-            DataFrame with calculated technical indicators
-        """
-        df = self._clean_dataframe(df)
+        fft = np.fft.fft(values)
+        freqs = np.fft.fftfreq(len(values))
         
-        df = self._calculate_price_action_indicators(df)
-        df = self._calculate_trend_indicators(df)
-        df = self._calculate_momentum_indicators(df)
-        df = self._calculate_volatility_indicators(df)
-        df = self._calculate_volume_indicators(df)
-        df = self._calculate_support_resistance(df)
-        df = self._calculate_fibonacci_levels(df)
-        df = self._calculate_composite_indicators(df)
+        # Find dominant cycles
+        dominant_cycles = []
+        for freq, amp in zip(freqs, np.abs(fft)):
+            if freq > 0:  # Only positive frequencies
+                period = 1/freq if freq != 0 else 0
+                dominant_cycles.append((period, amp))
         
-        return df
+        # Sort by amplitude
+        dominant_cycles.sort(key=lambda x: x[1], reverse=True)
+        
+        return {
+            'cycles': dominant_cycles[:3],  # Top 3 cycles
+            'dominant_cycle': dominant_cycles[0] if dominant_cycles else None
+        }
 
-    def _calculate_price_action_indicators(self, df: pd.DataFrame):
-        """Calculate price action based indicators"""
-        df['body_size'] = abs(df['close'] - df['open'])
-        df['upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
-        df['lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
-        df['is_bullish'] = df['close'] > df['open']
-        df['is_bearish'] = df['close'] < df['open']
-        df['is_doji'] = (abs(df['close'] - df['open']) / (df['high'] - df['low'])) < 0.1
-        return df
+class TechnicalPatternAnalyzer:
+    """Analyzes technical patterns in trading sessions"""
+    
+    def __init__(self):
+        self.pattern_definitions = {
+            'trend_reversal': {
+                'window': 5,
+                'threshold': 0.02
+            },
+            'breakout': {
+                'volume_threshold': 1.5,
+                'price_threshold': 0.01
+            },
+            'consolidation': {
+                'range_threshold': 0.005,
+                'min_periods': 3
+            }
+        }
+    
+    def analyze(self, state_history: List[Dict], trades: List[Dict]) -> Dict:
+        """Analyze technical patterns from session history"""
+        patterns = {
+            'trend_patterns': self._analyze_trend_patterns(state_history),
+            'volume_patterns': self._analyze_volume_patterns(state_history),
+            'momentum_patterns': self._analyze_momentum_patterns(state_history),
+            'volatility_patterns': self._analyze_volatility_patterns(state_history)
+        }
+        
+        return {
+            'patterns': patterns,
+            'signals': self._generate_signals(patterns),
+            'recommendations': self._generate_recommendations(patterns)
+        }
+    
+    def _analyze_trend_patterns(self, history: List[Dict]) -> Dict:
+        """Analyze trend patterns"""
+        prices = [state['technical_state']['trend']['close'] for state in history]
+        trend_strengths = [state['technical_state']['trend']['strength'] for state in history]
+        
+        # Detect trend changes
+        trend_changes = self._detect_trend_changes(prices, self.pattern_definitions['trend_reversal'])
+        
+        # Analyze trend strength
+        trend_strength_analysis = {
+            'average': np.mean(trend_strengths),
+            'consistency': np.std(trend_strengths),
+            'direction': 'up' if prices[-1] > prices[0] else 'down'
+        }
+        
+        return {
+            'changes': trend_changes,
+            'strength': trend_strength_analysis,
+            'persistent_trend': self._is_persistent_trend(trend_strengths)
+        }
+    
+    def _analyze_volume_patterns(self, history: List[Dict]) -> Dict:
+        """Analyze volume patterns"""
+        volumes = [state['technical_state'].get('volume', 0) for state in history]
+        
+        # Detect volume spikes
+        spikes = self._detect_volume_spikes(volumes, self.pattern_definitions['breakout']['volume_threshold'])
+        
+        # Volume trend
+        volume_trend = self._calculate_trend(volumes)
+        
+        return {
+            'spikes': spikes,
+            'trend': volume_trend,
+            'average': np.mean(volumes),
+            'distribution': self._analyze_volume_distribution(volumes)
+        }
+    
+    def _detect_trend_changes(self, prices: List[float], params: Dict) -> List[Dict]:
+        """Detect significant trend changes"""
+        changes = []
+        for i in range(params['window'], len(prices)):
+            window_prices = prices[i-params['window']:i]
+            current_price = prices[i]
+            
+            # Calculate price change
+            price_change = (current_price - window_prices[0]) / window_prices[0]
+            
+            if abs(price_change) > params['threshold']:
+                changes.append({
+                    'index': i,
+                    'magnitude': price_change,
+                    'direction': 'up' if price_change > 0 else 'down'
+                })
+                
+        return changes
 
-    def _calculate_trend_indicators(self, df: pd.DataFrame):
-        """Calculate trend-following indicators"""
-        macd = MACD(close=df['close'])
-        df['macd'] = macd.macd()
-        df['macd_signal'] = macd.macd_signal()
-        df['macd_diff'] = macd.macd_diff()
+class ZonePatternAnalyzer:
+    """Analyzes price zone patterns in trading sessions"""
+    
+    def __init__(self):
+        self.zone_params = {
+            'support_resistance': {
+                'touch_threshold': 3,
+                'bounce_threshold': 0.001,
+                'break_threshold': 0.002
+            },
+            'consolidation': {
+                'range_threshold': 0.005,
+                'min_periods': 5
+            }
+        }
+    
+    def analyze(self, state_history: List[Dict], trades: List[Dict]) -> Dict:
+        """Analyze zone patterns from session history"""
+        patterns = {
+            'zone_interactions': self._analyze_zone_interactions(state_history),
+            'zone_strength': self._analyze_zone_strength(state_history),
+            'zone_transitions': self._analyze_zone_transitions(state_history),
+            'trading_zones': self._analyze_trading_zones(state_history, trades)
+        }
         
-        ema_20 = EMAIndicator(close=df['close'], window=20)
-        ema_50 = EMAIndicator(close=df['close'], window=50)
-        df['ema_20'] = ema_20.ema_indicator()
-        df['ema_50'] = ema_50.ema_indicator()
+        return {
+            'patterns': patterns,
+            'key_zones': self._identify_key_zones(patterns),
+            'recommendations': self._generate_zone_recommendations(patterns)
+        }
+    
+    def _analyze_zone_interactions(self, history: List[Dict]) -> Dict:
+        """Analyze how price interacts with zones"""
+        interactions = []
         
-        sma_200 = SMAIndicator(close=df['close'], window=200)
-        df['sma_200'] = sma_200.sma_indicator()
+        for i in range(1, len(history)):
+            prev_state = history[i-1]
+            curr_state = history[i]
+            
+            # Detect zone touches, bounces, and breaks
+            for zone_type in ['support', 'resistance']:
+                interaction = self._detect_zone_interaction(
+                    prev_state['zone_state'],
+                    curr_state['zone_state'],
+                    zone_type
+                )
+                if interaction:
+                    interactions.append(interaction)
         
-        adx = ADXIndicator(high=df['high'], low=df['low'], close=df['close'])
-        df['adx'] = adx.adx()
+        return self._summarize_interactions(interactions)
+    
+    def _detect_zone_interaction(self, prev_state: Dict, curr_state: Dict, zone_type: str) -> Dict:
+        """Detect specific zone interactions"""
+        price = curr_state['current_price']
+        zone_level = curr_state[f'nearest_{zone_type}']
         
-        return df
-
-    def _calculate_momentum_indicators(self, df: pd.DataFrame):
-        """Calculate momentum-based indicators"""
-        rsi = RSIIndicator(close=df['close'])
-        df['rsi'] = rsi.rsi()
+        # Calculate price distance from zone
+        distance = abs(price - zone_level) / zone_level
         
-        stoch_rsi = StochRSIIndicator(close=df['close'])
-        df['stoch_rsi'] = stoch_rsi.stochrsi()
+        if distance < self.zone_params['support_resistance']['bounce_threshold']:
+            return {
+                'type': 'touch',
+                'zone_type': zone_type,
+                'price': price,
+                'zone_level': zone_level,
+                'strength': 1 - distance/self.zone_params['support_resistance']['bounce_threshold']
+            }
         
-        williams_r = WilliamsRIndicator(high=df['high'], low=df['low'], close=df['close'])
-        df['williams_r'] = williams_r.williams_r()
+        # Detect breaks
+        prev_price = prev_state['current_price']
+        if (zone_type == 'support' and price < zone_level and prev_price > zone_level) or \
+           (zone_type == 'resistance' and price > zone_level and prev_price < zone_level):
+            return {
+                'type': 'break',
+                'zone_type': zone_type,
+                'price': price,
+                'zone_level': zone_level,
+                'magnitude': abs(price - zone_level) / zone_level
+            }
         
-        return df
-
-    def _calculate_volatility_indicators(self, df: pd.DataFrame):
-        """Calculate volatility indicators"""
-        bb = BollingerBands(close=df['close'])
-        df['bb_high'] = bb.bollinger_hband()
-        df['bb_low'] = bb.bollinger_lband()
-        df['bb_mid'] = bb.bollinger_mavg()
+        return None
+    
+    def _analyze_zone_strength(self, history: List[Dict]) -> Dict:
+        """Analyze the strength of different price zones"""
+        support_tests = []
+        resistance_tests = []
         
-        atr = AverageTrueRange(high=df['high'], low=df['low'], close=df['close'])
-        df['atr'] = atr.average_true_range()
+        for state in history:
+            if state['zone_state'].get('in_support_zone'):
+                support_tests.append({
+                    'level': state['zone_state']['nearest_support'],
+                    'strength': state['zone_state']['zone_strength']
+                })
+            if state['zone_state'].get('in_resistance_zone'):
+                resistance_tests.append({
+                    'level': state['zone_state']['nearest_resistance'],
+                    'strength': state['zone_state']['zone_strength']
+                })
         
-        kc = KeltnerChannel(high=df['high'], low=df['low'], close=df['close'])
-        df['kc_high'] = kc.keltner_channel_hband()
-        df['kc_low'] = kc.keltner_channel_lband()
-        df['kc_mid'] = kc.keltner_channel_mband()
+        return {
+            'support': self._calculate_zone_strength(support_tests),
+            'resistance': self._calculate_zone_strength(resistance_tests)
+        }
+    
+    def _calculate_zone_strength(self, tests: List[Dict]) -> Dict:
+        """Calculate zone strength metrics"""
+        if not tests:
+            return {'strength': 0, 'reliability': 0}
+            
+        strengths = [test['strength'] for test in tests]
         
-        return df
-
-    def _calculate_volume_indicators(self, df: pd.DataFrame):
-        """Calculate volume-based indicators"""
-        adi = AccDistIndexIndicator(high=df['high'], low=df['low'], close=df['close'], volume=df['volume'])
-        df['adi'] = adi.acc_dist_index()
-        
-        obv = OnBalanceVolumeIndicator(close=df['close'], volume=df['volume'])
-        df['obv'] = obv.on_balance_volume()
-        
-        fi = ForceIndexIndicator(close=df['close'], volume=df['volume'])
-        df['force_index'] = fi.force_index()
-        
-        return df
-
-    def _calculate_support_resistance(self, df: pd.DataFrame):
-        """Calculate support and resistance levels"""
-        window = 20
-        df['rolling_high'] = df['high'].rolling(window=window).max()
-        df['rolling_low'] = df['low'].rolling(window=window).min()
-        
-        df['support'] = df['rolling_low'].where(df['rolling_low'] < df['close'], np.nan)
-        df['resistance'] = df['rolling_high'].where(df['rolling_high'] > df['close'], np.nan)
-        
-        return df
-
-    def _calculate_fibonacci_levels(self, df: pd.DataFrame):
-        """Calculate Fibonacci retracement levels"""
-        high = df['high'].max()
-        low = df['low'].min()
-        diff = high - low
-        
-        df['fib_0'] = low
-        df['fib_23.6'] = low + 0.236 * diff
-        df['fib_38.2'] = low + 0.382 * diff
-        df['fib_50'] = low + 0.5 * diff
-        df['fib_61.8'] = low + 0.618 * diff
-        df['fib_100'] = high
-        
-        return df
-
-    def _calculate_composite_indicators(self, df: pd.DataFrame):
-        """Calculate custom composite indicators"""
-        df['trend_strength'] = (df['adx'] + df['rsi']) / 2
-        df['volatility_index'] = (df['atr'] / df['close']) * 100
-        df['momentum_score'] = (df['rsi'] + (100 + df['williams_r']) / 2) / 2
-        
-        return df
-
-    def _clean_dataframe(self, df: pd.DataFrame):
-        """Clean and validate the dataframe"""
-        required_columns = ['open', 'high', 'low', 'close', 'volume']
-        for col in required_columns:
-            if col not in df.columns:
-                raise ValueError(f"Missing required column: {col}")
-        
-        df = df.dropna()
-        df = df.sort_index()
-        
-        return df
+        return {
+            'strength': np.mean(strengths),
+            'reliability': len(tests) / max(1, np.std(strengths)),
+            'tests': len(tests)
+        }
