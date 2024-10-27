@@ -4,7 +4,10 @@ from app.core.ai.market_psychology import PsychologyPatternAnalyzer
 from app.core.ai.technical_analyzer import TechnicalPatternAnalyzer
 from app.core.ai.trading_session import TradingSession
 from app.core.ai.zone_analyzer import ZonePatternAnalyzer
+import pandas as pd
+import numpy as np
 
+from app.core.domain.models.session_models import SessionStats  # Add this import
 
 class SessionManager:
     """Manages multiple trading sessions and extracts learning patterns"""
@@ -431,10 +434,10 @@ class SessionManager:
             'advice': advice
         }
 
-    def save_session_stats(self, session_stats) -> None:
+    def save_session_stats(self, session_stats: SessionStats) -> None:
         """Save session statistics and maintain session limit"""
         try:
-            # Convert datetime objects to string for JSON serialization
+            # Convert session stats to dictionary
             stats_dict = {
                 'session_id': session_stats.session_id,
                 'start_time': session_stats.start_time.isoformat(),
@@ -453,36 +456,29 @@ class SessionManager:
             # Add session to list
             self.sessions.append(stats_dict)
             
-            # Update session metrics
-            self.session_metrics.append({
-                'session_id': session_stats.session_id,
-                'performance': {
-                    'win_rate': stats_dict['win_rate'],
-                    'avg_profit': stats_dict['avg_profit'],
-                    'sharpe_ratio': stats_dict['sharpe_ratio'],
-                    'max_drawdown': stats_dict['max_drawdown']
-                }
-            })
-            
             # Maintain maximum sessions limit
             if len(self.sessions) > self.max_sessions:
-                # Remove worst performing session based on Sharpe ratio
-                sorted_sessions = sorted(
-                    self.sessions,
-                    key=lambda x: x['sharpe_ratio'] - x['max_drawdown'],
-                    reverse=True
-                )
-                self.sessions = sorted_sessions[:self.max_sessions]
+                self._remove_worst_performing_session()
                 
-                # Update metrics
-                self._update_performance_metrics()
-            
-            self.logger.info(f"Successfully saved stats for session {session_stats.session_id}")
+            # Update performance metrics
+            self._update_performance_metrics()
             
         except Exception as e:
             self.logger.error(f"Error saving session stats: {str(e)}")
             raise
-            
+
+    def _remove_worst_performing_session(self):
+        """Remove worst performing session based on combined metric"""
+        self.sessions.sort(
+            key=lambda x: (
+                x['sharpe_ratio'] * 0.4 +
+                x['win_rate'] * 0.3 -
+                x['max_drawdown'] * 0.3
+            ),
+            reverse=True
+        )
+        self.sessions.pop()
+
     def _update_performance_metrics(self) -> None:
         """Update aggregate performance metrics"""
         try:
@@ -571,4 +567,7 @@ class SessionManager:
         except Exception as e:
             self.logger.error(f"Error getting performance summary: {str(e)}")
             return {}
+
+
+
 

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
+from tensorflow.keras.models import Model
 
 from app.core.ai.technical_analyzer import TechnicalPatternAnalyzer
 from app.core.ai.market_environment import MarketEnvironment
@@ -12,12 +13,13 @@ from app.core.ai.trading_session import TradingSession
 from app.core.ai.zone_analyzer import ZonePatternAnalyzer
 from app.core.ai.market_psychology import PsychologyPatternAnalyzer
 from app.core.ai.trading_psychology import TradingPsychology
-from app.core.ai.model_builder import ModelBuilder
+from app.core.ai.model_builder import ModelBuilder, TrainingResult
 from app.core.ai.session_manager import SessionManager
 from app.core.ai.reinforcement.market_state import MarketState
 from app.core.ai.reinforcement.action_space import ActionSpace
 from app.core.ai.reinforcement.reward_calculator import RewardCalculator
 from app.core.domain.models.trade_suggestion import DetailedTradeSuggestion
+from app.core.domain.models.session_models import SessionStats
 
 @dataclass
 class SessionStats:
@@ -111,11 +113,12 @@ class TradewiseAI:
                 }
             )
 
-            # Train with reinforcement learning
+            # Train with reinforcement learning (reduced iterations)
             trained_session = await self._train_with_market_environment(
                 session_stats,
                 market_env,
-                data_feed
+                data_feed,
+                episodes=50  # Reduced from 100 to 50
             )
             
             # Update session manager
@@ -130,16 +133,17 @@ class TradewiseAI:
     async def _train_with_market_environment(self,
                                           session: SessionStats,
                                           market_env: MarketEnvironment,
-                                          data_feed: pd.DataFrame) -> SessionStats:
+                                          data_feed: pd.DataFrame,
+                                          episodes: int) -> SessionStats:
         """Train model using market environment reinforcement learning"""
         try:
-            # Initialize model
-            model = self._build_model(market_env.state_size, market_env.action_size)
+            # Initialize model using ModelBuilder
+            input_shape = (market_env.state_size,)  # Shape for RL model input
+            model = self.model_builder.build_rl_model(input_shape, market_env.action_space.n)
             session.model = model
             
             # Training parameters
-            episodes = 100
-            max_steps = len(data_feed) - 1
+            max_steps = 20  # Reduced from len(data_feed) - 1 to 20
             
             for episode in range(episodes):
                 self.logger.info(f"Starting episode {episode + 1}/{episodes}")
@@ -151,12 +155,15 @@ class TradewiseAI:
                 for step in range(max_steps):
                     # Get action using epsilon-greedy policy
                     if np.random.random() < self.epsilon:
-                        action = np.random.randint(market_env.action_size)
+                        action = np.random.randint(market_env.action_space.n)
                     else:
-                        action = np.argmax(model.predict(state.reshape(1, -1))[0])
+                        # Use predict on batch to avoid TensorFlow logging
+                        state_batch = state.reshape(1, -1)
+                        q_values = model.predict_on_batch(state_batch)
+                        action = np.argmax(q_values[0])
                     
                     # Take action in environment
-                    next_state, reward, done, info = market_env.step(action)
+                    next_state, reward, done, _, info = market_env.step(action)
                     
                     # Store experience and train model
                     self._train_on_experience(
@@ -228,19 +235,21 @@ class TradewiseAI:
             raise
 
     def _train_on_experience(self,
-                           model,
+                           model: Model,
                            state: np.ndarray,
                            action: int,
                            reward: float,
                            next_state: np.ndarray,
                            done: bool):
-        """Train model on single experience tuple"""
+        """Train model on single experience tuple using ModelBuilder"""
         try:
-            # Get current Q-values
-            current_q = model.predict(state.reshape(1, -1))[0]
+            # Get current Q-values using predict_on_batch
+            state_batch = state.reshape(1, -1)
+            current_q = model.predict_on_batch(state_batch)[0]
             
-            # Get next Q-values
-            next_q = model.predict(next_state.reshape(1, -1))[0]
+            # Get next Q-values using predict_on_batch
+            next_state_batch = next_state.reshape(1, -1)
+            next_q = model.predict_on_batch(next_state_batch)[0]
             
             # Update Q-value for taken action
             if done:
@@ -248,11 +257,11 @@ class TradewiseAI:
             else:
                 current_q[action] = reward + self.gamma * np.max(next_q)
             
-            # Train model
-            model.fit(
-                state.reshape(1, -1),
-                current_q.reshape(1, -1),
-                verbose=0
+            # Train model using ModelBuilder's methods
+            self.model_builder.train_on_batch(
+                model,
+                state_batch,
+                current_q.reshape(1, -1)
             )
             
         except Exception as e:
@@ -849,4 +858,154 @@ class TradewiseAI:
         except Exception as e:
             self.logger.error(f"Error getting initial technical state: {str(e)}")
             return {}
+
+    def _setup_logging(self):
+        """Setup logging configuration"""
+        try:
+            # Create logs directory if it doesn't exist
+            os.makedirs(self.log_dir, exist_ok=True)
+            
+            # Configure logging
+            log_file = os.path.join(self.log_dir, f'tradewise_{datetime.now().strftime("%Y%m%d")}.log')
+            
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.FileHandler(log_file),
+                    logging.StreamHandler()
+                ]
+            )
+            
+            self.logger = logging.getLogger(__name__)
+            self.logger.info("Logging setup completed")
+            
+        except Exception as e:
+            print(f"Error setting up logging: {str(e)}")
+            raise
+
+    def _create_directories(self):
+        """Create necessary directories for models and sessions"""
+        try:
+            # Create model directory
+            os.makedirs(self.model_path, exist_ok=True)
+            self.logger.info(f"Model directory created/verified: {self.model_path}")
+            
+            # Create session directory
+            os.makedirs(self.session_save_dir, exist_ok=True)
+            self.logger.info(f"Session directory created/verified: {self.session_save_dir}")
+            
+            # Create subdirectories for different model types
+            model_subdirs = ['lstm', 'reinforcement', 'ensemble']
+            for subdir in model_subdirs:
+                os.makedirs(os.path.join(self.model_path, subdir), exist_ok=True)
+                
+            self.logger.info("All required directories created/verified")
+            
+        except Exception as e:
+            self.logger.error(f"Error creating directories: {str(e)}")
+            raise
+
+    def _load_existing_sessions(self):
+        """Load existing session data from disk"""
+        try:
+            session_files = []
+            
+            # Get all session files
+            for file in os.listdir(self.session_save_dir):
+                if file.endswith('.json'):
+                    session_files.append(os.path.join(self.session_save_dir, file))
+            
+            if not session_files:
+                self.logger.info("No existing sessions found")
+                return
+            
+            # Load each session file
+            loaded_sessions = []
+            for session_file in session_files:
+                try:
+                    with open(session_file, 'r') as f:
+                        import json
+                        session_data = json.load(f)
+                        
+                        # Convert string dates back to datetime
+                        session_data['start_time'] = datetime.fromisoformat(session_data['start_time'])
+                        session_data['end_time'] = datetime.fromisoformat(session_data['end_time'])
+                        
+                        # Create SessionStats object
+                        session_stats = SessionStats(
+                            session_id=session_data['session_id'],
+                            start_time=session_data['start_time'],
+                            end_time=session_data['end_time'],
+                            total_trades=session_data['total_trades'],
+                            winning_trades=session_data['winning_trades'],
+                            losing_trades=session_data['losing_trades'],
+                            win_rate=session_data['win_rate'],
+                            avg_profit=session_data['avg_profit'],
+                            max_drawdown=session_data['max_drawdown'],
+                            sharpe_ratio=session_data['sharpe_ratio'],
+                            psychological_state=session_data['psychological_state'],
+                            technical_state=session_data['technical_state'],
+                            reinforcement_stats=session_data.get('reinforcement_stats'),
+                            prediction_accuracy=session_data.get('prediction_accuracy')
+                        )
+                        
+                        loaded_sessions.append(session_stats)
+                        
+                except Exception as e:
+                    self.logger.error(f"Error loading session file {session_file}: {str(e)}")
+                    continue
+            
+            # Add loaded sessions to session manager
+            for session in loaded_sessions:
+                self.session_manager.save_session_stats(session)
+                
+            self.logger.info(f"Successfully loaded {len(loaded_sessions)} sessions")
+            
+            # Maintain session limits
+            if len(loaded_sessions) > self.max_sessions:
+                self.session_manager.maintain_min_sessions(self.min_sessions)
+                
+        except Exception as e:
+            self.logger.error(f"Error loading existing sessions: {str(e)}")
+            raise
+
+    def save_session(self, session_stats: SessionStats):
+        """Save session data to disk"""
+        try:
+            # Create filename with session ID and timestamp
+            filename = f"session_{session_stats.session_id}_{session_stats.end_time.strftime('%Y%m%d_%H%M%S')}.json"
+            filepath = os.path.join(self.session_save_dir, filename)
+            
+            # Convert session stats to dictionary
+            session_dict = {
+                'session_id': session_stats.session_id,
+                'start_time': session_stats.start_time.isoformat(),
+                'end_time': session_stats.end_time.isoformat(),
+                'total_trades': session_stats.total_trades,
+                'winning_trades': session_stats.winning_trades,
+                'losing_trades': session_stats.losing_trades,
+                'win_rate': float(session_stats.win_rate),
+                'avg_profit': float(session_stats.avg_profit),
+                'max_drawdown': float(session_stats.max_drawdown),
+                'sharpe_ratio': float(session_stats.sharpe_ratio),
+                'psychological_state': session_stats.psychological_state,
+                'technical_state': session_stats.technical_state,
+                'reinforcement_stats': session_stats.reinforcement_stats,
+                'prediction_accuracy': session_stats.prediction_accuracy
+            }
+            
+            # Save to file
+            with open(filepath, 'w') as f:
+                import json
+                json.dump(session_dict, f, indent=4)
+                
+            self.logger.info(f"Session saved successfully: {filepath}")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving session: {str(e)}")
+            raise
+
+
+
 

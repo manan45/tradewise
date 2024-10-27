@@ -8,8 +8,15 @@ from typing import List, Optional, Union, Dict
 from decimal import Decimal
 from datetime import datetime, timedelta
 from sqlalchemy.exc import SQLAlchemyError
+from typing import Optional
+import logging
 
 class StockRepository(StockRepositoryInterface):
+    """Repository for stock data operations"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+
     async def get_all_stocks(self) -> List[Stock]:
         with postgres_client.get_session() as session:
             result = session.execute(select(StockModel))

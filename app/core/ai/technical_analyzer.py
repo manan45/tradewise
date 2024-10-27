@@ -21,6 +21,80 @@ class TechnicalPatternAnalyzer:
                 'low': 0.3
             }
         }
+        self.logger = logging.getLogger(__name__)
+
+    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate technical indicators for the dataset"""
+        try:
+            data = df.copy()
+            
+            # Moving Averages
+            data['sma_20'] = data['close'].rolling(window=20).mean()
+            data['sma_50'] = data['close'].rolling(window=50).mean()
+            
+            # RSI
+            delta = data['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            data['rsi'] = 100 - (100 / (1 + rs))
+            
+            # MACD
+            exp1 = data['close'].ewm(span=12, adjust=False).mean()
+            exp2 = data['close'].ewm(span=26, adjust=False).mean()
+            data['macd'] = exp1 - exp2
+            data['macd_hist'] = data['macd'] - data['macd'].ewm(span=9, adjust=False).mean()
+            
+            # Bollinger Bands
+            data['bb_middle'] = data['close'].rolling(window=20).mean()
+            bb_std = data['close'].rolling(window=20).std()
+            data['bb_upper'] = data['bb_middle'] + (bb_std * 2)
+            data['bb_lower'] = data['bb_middle'] - (bb_std * 2)
+            data['bb_width'] = (data['bb_upper'] - data['bb_lower']) / data['bb_middle']
+            data['bb_position'] = (data['close'] - data['bb_lower']) / (data['bb_upper'] - data['bb_lower'])
+            
+            # Volatility and Trend
+            data['volatility'] = data['close'].rolling(window=20).std() / data['close'].rolling(window=20).mean()
+            data['trend_strength'] = abs(data['sma_20'] - data['sma_50']) / data['sma_50']
+            data['price_momentum'] = data['close'].pct_change(periods=10)
+            
+            # ATR
+            high_low = data['high'] - data['low']
+            high_close = abs(data['high'] - data['close'].shift())
+            low_close = abs(data['low'] - data['close'].shift())
+            ranges = pd.concat([high_low, high_close, low_close], axis=1)
+            true_range = ranges.max(axis=1)
+            data['atr'] = true_range.rolling(window=14).mean()
+            
+            # Forward fill NaN values
+            data = data.fillna(method='ffill').fillna(method='bfill')
+            
+            return data
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating indicators: {str(e)}")
+            return df
+
+    def get_trend_strength(self, df: pd.DataFrame) -> float:
+        """Get current trend strength"""
+        try:
+            if 'trend_strength' not in df.columns:
+                df = self.calculate_indicators(df)
+            return float(df['trend_strength'].iloc[-1])
+        except Exception as e:
+            self.logger.error(f"Error getting trend strength: {str(e)}")
+            return 0.5
+
+    def analyze_volume_consistency(self, df: pd.DataFrame) -> float:
+        """Analyze volume consistency"""
+        try:
+            volume_ma = df['volume'].rolling(window=20).mean()
+            volume_std = df['volume'].rolling(window=20).std()
+            consistency = 1 - (volume_std / volume_ma).iloc[-1]
+            return float(np.clip(consistency, 0, 1))
+        except Exception as e:
+            self.logger.error(f"Error analyzing volume consistency: {str(e)}")
+            return 0.5
 
     def analyze(self, state_history: List[Dict], trades: List[Dict]) -> Dict:
         """Analyze technical patterns from market data"""
@@ -147,4 +221,3 @@ class TechnicalPatternAnalyzer:
         )
         
         return float(np.clip(strength, 0, 1))
-
