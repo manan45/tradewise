@@ -6,13 +6,15 @@ from app.core.ai.trading_session import TradingSession
 from app.core.ai.zone_analyzer import ZonePatternAnalyzer
 import pandas as pd
 import numpy as np
+from datetime import datetime
 
-from app.core.domain.models.session_models import SessionStats  # Add this import
+from app.core.domain.models.session_models import SessionStats
+from app.core.utils.traning_logger import EnhancedTrainingLogger
 
 class SessionManager:
     """Manages multiple trading sessions and extracts learning patterns"""
     
-    def __init__(self, max_sessions: int = 10):
+    def __init__(self, max_sessions: int = 10, log_dir: str = "logs/"):
         self.max_sessions = max_sessions
         self.sessions = []
         self.learned_patterns = {
@@ -30,9 +32,10 @@ class SessionManager:
             'zone': ZonePatternAnalyzer()
         }
         
-        # Initialize logging
+        # Initialize enhanced logger
         self.logger = logging.getLogger(__name__)
-    
+        self.session_logger = EnhancedTrainingLogger(log_dir)
+
     def create_new_session(self, 
                           market_data: pd.DataFrame, 
                           initial_conditions: Dict) -> TradingSession:
@@ -43,7 +46,7 @@ class SessionManager:
         # Create new session
         session = TradingSession()
         session.initialize_session(
-            psychology=adjusted_conditions['psychology'],
+            initial_psychology=adjusted_conditions['psychology'],  # Changed from psychology to initial_psychology
             market_data=market_data,
             zones=adjusted_conditions['zones']
         )
@@ -84,25 +87,40 @@ class SessionManager:
     
     def analyze_session_results(self, session: TradingSession) -> Dict:
         """Analyze completed session and extract patterns"""
-        analysis = {
-            'psychological_patterns': self.pattern_analyzers['psychology'].analyze(
-                session.state_history,
-                session.trades
-            ),
-            'technical_patterns': self.pattern_analyzers['technical'].analyze(
-                session.state_history,
-                session.trades
-            ),
-            'zone_patterns': self.pattern_analyzers['zone'].analyze(
-                session.state_history,
-                session.trades
+        try:
+            analysis = {
+                'psychological_patterns': self.pattern_analyzers['psychology'].analyze(
+                    session.state_history,
+                    session.trades
+                ),
+                'technical_patterns': self.pattern_analyzers['technical'].analyze(
+                    session.state_history,
+                    session.trades
+                ),
+                'zone_patterns': self.pattern_analyzers['zone'].analyze(
+                    session.state_history,
+                    session.trades
+                )
+            }
+            
+            # Update learned patterns
+            self._update_learned_patterns(analysis)
+            
+            # Log analysis using enhanced logger
+            analysis_session_id = f"analysis_{datetime.now().timestamp()}"
+            self.session_logger.start_session(analysis_session_id, 100000.0)
+            self.session_logger.end_session(
+                final_balance=session.final_balance or 100000.0,
+                performance_metrics=analysis,
+                psychological_state=session.psychological_state,
+                technical_state=session.technical_state
             )
-        }
-        
-        # Update learned patterns
-        self._update_learned_patterns(analysis)
-        
-        return analysis
+            
+            return analysis
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing session results: {str(e)}")
+            raise
     
     def _update_learned_patterns(self, new_analysis: Dict):
         """Update learned patterns with new session analysis"""
@@ -147,44 +165,31 @@ class SessionManager:
             Dict containing recommendations for different aspects of trading
         """
         try:
-            # Get base recommendations from different components
-            psychological_recs = self._get_psychological_recommendations(psychological_state)
-            technical_recs = self._get_technical_recommendations(current_market_state)
-            zone_recs = self._get_zone_recommendations(current_market_state)
-            risk_recs = self._get_risk_recommendations(psychological_state, current_market_state)
-            
-            # Combine recommendations
             recommendations = {
-                'psychological_adjustments': psychological_recs,
-                'technical_setups': technical_recs,
-                'zone_strategies': zone_recs,
-                'risk_adjustments': risk_recs,
-                'summary': self._generate_recommendation_summary(
-                    psychological_recs,
-                    technical_recs,
-                    zone_recs,
-                    risk_recs
+                'psychological_adjustments': self._get_psychological_recommendations(psychological_state),
+                'technical_setups': self._get_technical_recommendations(current_market_state),
+                'zone_strategies': self._get_zone_recommendations(current_market_state),
+                'risk_adjustments': self._get_risk_recommendations(
+                    psychological_state,
+                    current_market_state
                 )
             }
             
-            # Add session-specific advice
-            recommendations['session_advice'] = self._generate_session_advice(
-                current_market_state,
-                psychological_state,
-                recommendations
+            # Log recommendations using enhanced logger
+            rec_session_id = f"recommendations_{datetime.now().timestamp()}"
+            self.session_logger.start_session(rec_session_id, 100000.0)
+            self.session_logger.end_session(
+                final_balance=100000.0,
+                performance_metrics=recommendations,
+                psychological_state=psychological_state,
+                technical_state=current_market_state
             )
             
             return recommendations
             
         except Exception as e:
-            logging.error(f"Error generating session recommendations: {str(e)}")
-            return {
-                'psychological_adjustments': {},
-                'technical_setups': {},
-                'zone_strategies': {},
-                'risk_adjustments': {},
-                'summary': "Error generating recommendations"
-            }
+            self.logger.error(f"Error generating recommendations: {str(e)}")
+            raise
     
     def _get_psychological_recommendations(self, psych_state: Dict) -> Dict:
         """Generate psychological recommendations"""
@@ -463,6 +468,20 @@ class SessionManager:
             # Update performance metrics
             self._update_performance_metrics()
             
+            # Log session using enhanced logger
+            self.session_logger.start_session(session_stats.session_id, 100000.0)
+            self.session_logger.end_session(
+                final_balance=100000.0 * (1 + session_stats.avg_profit),
+                performance_metrics={
+                    'win_rate': session_stats.win_rate,
+                    'avg_profit': session_stats.avg_profit,
+                    'max_drawdown': session_stats.max_drawdown,
+                    'sharpe_ratio': session_stats.sharpe_ratio
+                },
+                psychological_state=session_stats.psychological_state,
+                technical_state=session_stats.technical_state
+            )
+            
         except Exception as e:
             self.logger.error(f"Error saving session stats: {str(e)}")
             raise
@@ -516,12 +535,19 @@ class SessionManager:
         """Ensure minimum number of sessions is maintained"""
         try:
             while len(self.sessions) > min_sessions:
-                # Remove worst performing session
                 worst_session = min(
                     self.sessions,
                     key=lambda x: x['sharpe_ratio'] - x['max_drawdown']
                 )
                 self.sessions.remove(worst_session)
+                
+                # Log session removal
+                self.session_logger.log_forecast(
+                    predicted_values=[],
+                    confidence=0.0,
+                    technical_indicators={},
+                    actual_value=None
+                )
                 
             self._update_performance_metrics()
             
@@ -567,6 +593,9 @@ class SessionManager:
         except Exception as e:
             self.logger.error(f"Error getting performance summary: {str(e)}")
             return {}
+
+
+
 
 
 

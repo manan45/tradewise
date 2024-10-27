@@ -4,6 +4,16 @@ import logging
 from typing import Dict, List, Optional
 import pandas as pd
 from datetime import datetime
+import sys
+import argparse
+from pathlib import Path
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 from app.core.ai.tradewise_ai import TradewiseAI
 from app.core.domain.models.session_models import SessionStats
@@ -28,7 +38,7 @@ class TrainingService:
             sequence_length=10,
             prediction_horizon=1,
             batch_size=32,
-            epochs=10  # Reduced from 50 to 10
+            epochs=10
         )
         self.logger = logging.getLogger(__name__)
 
@@ -100,28 +110,32 @@ class TrainingService:
                                price_history: List[StockPrice]) -> Dict:
         """Train model, evaluate performance, and generate trade suggestions"""
         try:
-            self.logger.info(f"Starting training and evaluation for {symbol}")
-            
             # Convert price history to DataFrame with technical indicators
             data_feed = self._convert_stockprice_to_dataframe(price_history)
             
             if data_feed.empty:
                 raise ValueError(f"No valid data available for {symbol}")
             
-            # Train LSTM model
-            training_result = await self._train_lstm_model(data_feed)
+            # Train model and get best session
+            best_session = await self.tradewise.train(data_feed)
             
-            # Train with reinforcement learning
-            session_stats = await self.tradewise.train(data_feed)
-            
-            # Generate trade suggestions
+            # Generate trade suggestions using best session
             suggestions = await self.tradewise.generate_trade_suggestions(data_feed)
             
-            return self._prepare_evaluation_results(
-                training_result,
-                session_stats,
-                suggestions
-            )
+            return {
+                'status': 'success',
+                'timestamp': datetime.now().isoformat(),
+                'training_summary': {
+                    'session_performance': {
+                        'win_rate': best_session.win_rate,
+                        'sharpe_ratio': best_session.sharpe_ratio,
+                        'max_drawdown': best_session.max_drawdown
+                    }
+                },
+                'trade_suggestions': [
+                    suggestion.to_dict() for suggestion in suggestions
+                ]
+            }
             
         except Exception as e:
             self.logger.error(f"Error in training and evaluation: {str(e)}")
@@ -159,6 +173,7 @@ class TrainingService:
 async def train_and_evaluate_model(symbol: str) -> Dict:
     """Train and evaluate model for a specific symbol"""
     try:
+        logger.info(f"Starting training for symbol: {symbol}")
         service = create_training_service()
         repository = StockRepository()
         
@@ -167,11 +182,12 @@ async def train_and_evaluate_model(symbol: str) -> Dict:
         
         if not price_history:
             raise ValueError(f"No price history available for {symbol}")
-            
+        
+        logger.info(f"Retrieved {len(price_history)} price points for {symbol}")
         return await service.train_and_evaluate(symbol, price_history)
         
     except Exception as e:
-        logging.error(f"Error in train_and_evaluate_model: {str(e)}")
+        logger.error(f"Error in train_and_evaluate_model: {str(e)}")
         return {
             'status': 'error',
             'error': str(e),
@@ -179,50 +195,68 @@ async def train_and_evaluate_model(symbol: str) -> Dict:
         }
 
 def create_training_service():
-    """Create and configure training service"""
-    model_path = os.getenv('MODEL_PATH', './models/')
-    session_save_dir = os.getenv('SESSION_SAVE_DIR', './sessions/')
-    log_dir = os.getenv('LOG_DIR', './logs/')
+    """Create and configure training service with default paths"""
+    # Ensure directories exist
+    base_dir = Path(__file__).parent.parent.parent
+    
+    model_path = Path(os.getenv('MODEL_PATH', base_dir / 'models'))
+    session_save_dir = Path(os.getenv('SESSION_SAVE_DIR', base_dir / 'sessions'))
+    log_dir = Path(os.getenv('LOG_DIR', base_dir / 'logs'))
+    
+    # Create directories if they don't exist
+    for directory in [model_path, session_save_dir, log_dir]:
+        directory.mkdir(parents=True, exist_ok=True)
     
     return TrainingService(
-        model_path=model_path,
-        session_save_dir=session_save_dir,
-        log_dir=log_dir
+        model_path=str(model_path),
+        session_save_dir=str(session_save_dir),
+        log_dir=str(log_dir)
     )
 
-# CLI entry point
 def main():
     """Main entry point for training service"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Train and evaluate TradewiseAI model')
-    parser.add_argument('--symbol', type=str, required=True, help='Stock symbol to train on')
-    args = parser.parse_args()
-    
-    # Run training and evaluation
-    results = asyncio.run(train_and_evaluate_model(args.symbol))
-    
-    # Print results
-    print("\nTraining and Evaluation Results:")
-    print("================================")
-    print(f"Status: {results['status']}")
-    print(f"Timestamp: {results['timestamp']}")
-    
-    if results['status'] == 'success':
-        print("\nSession Performance:")
-        print("-------------------")
-        session_perf = results['training_summary']['session_performance']
-        print(f"Win Rate: {session_perf['win_rate']:.2%}")
-        print(f"Sharpe Ratio: {session_perf['sharpe_ratio']:.2f}")
-        print(f"Max Drawdown: {session_perf['max_drawdown']:.2%}")
+    try:
+        # Set up argument parser
+        parser = argparse.ArgumentParser(description='Train and evaluate TradewiseAI model')
+        parser.add_argument('--symbol', type=str, default='AAPL',
+                          help='Stock symbol to train on (default: AAPL)')
+        args = parser.parse_args()
         
-        print("\nTrade Suggestions:")
-        print("----------------")
-        for suggestion in results['trade_suggestions']:
-            print(f"\nAction: {suggestion['action']}")
-            print(f"Confidence: {suggestion['summary']['confidence']}")
-            print(f"Risk Management: {suggestion['risk_management']}")
-            print(f"Technical Analysis: {suggestion['technical_analysis']}")
+        logger.info(f"Starting training service for symbol: {args.symbol}")
+        
+        # Run training and evaluation
+        results = asyncio.run(train_and_evaluate_model(args.symbol))
+        
+        # Print results
+        print("\nTraining and Evaluation Results:")
+        print("================================")
+        print(f"Status: {results['status']}")
+        print(f"Timestamp: {results['timestamp']}")
+        
+        if results['status'] == 'success':
+            print("\nSession Performance:")
+            print("-------------------")
+            session_perf = results['training_summary']['session_performance']
+            print(f"Win Rate: {session_perf['win_rate']:.2%}")
+            print(f"Sharpe Ratio: {session_perf['sharpe_ratio']:.2f}")
+            print(f"Max Drawdown: {session_perf['max_drawdown']:.2%}")
+            
+            print("\nTrade Suggestions:")
+            print("----------------")
+            for suggestion in results['trade_suggestions']:
+                print(f"\nAction: {suggestion['action']}")
+                print(f"Confidence: {suggestion['summary']['confidence']}")
+                print(f"Risk Management: {suggestion['risk_management']}")
+                print(f"Technical Analysis: {suggestion['technical_analysis']}")
+        else:
+            print(f"\nError: {results.get('error', 'Unknown error occurred')}")
+            
+    except KeyboardInterrupt:
+        logger.info("Training service stopped by user")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Unexpected error in main: {str(e)}")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()

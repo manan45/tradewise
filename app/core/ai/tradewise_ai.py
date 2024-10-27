@@ -60,7 +60,10 @@ class TradewiseAI:
         self.zone_analyzer = ZonePatternAnalyzer()
         self.psychology_analyzer = PsychologyPatternAnalyzer()
         self.trading_psychology = TradingPsychology()
-        self.session_manager = SessionManager(max_sessions=max_sessions)
+        
+        # Initialize session manager for logging
+        self.session_manager = SessionManager(max_sessions=max_sessions, log_dir=log_dir)
+        
         self.model_builder = ModelBuilder()
         
         # Initialize market environment components
@@ -72,142 +75,248 @@ class TradewiseAI:
         self.gamma = 0.95  # Discount factor
         self.epsilon = 0.1  # Exploration rate
         self.learning_rate = 0.001
+        self.batch_size = 32
         
         # Setup logging and directories
-        self._setup_logging()
+        self.logger = logging.getLogger(__name__)
         self._create_directories()
-        
-        # Load existing sessions if available
-        self._load_existing_sessions()
 
     async def train(self, data_feed: pd.DataFrame) -> SessionStats:
-        """Train model with market environment-based reinforcement learning"""
+        """Train model with multiple episodes and sessions, tracking best performers"""
         try:
-            self.logger.info("Starting new training session with market environment")
+            # Create training session ID
+            training_id = f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            self.logger.info(f"Starting new training session: {training_id}")
+            
+            # Initialize training configuration
+            training_config = {
+                'data_length': len(data_feed),
+                'feature_count': len(self.market_state.state_features),
+                'gamma': self.gamma,
+                'initial_epsilon': self.epsilon,
+                'learning_rate': self.learning_rate
+            }
+            
+            # Start training session in session manager's logger
+            training_session_id = self.session_manager.session_logger.start_training_session(training_config)
             
             # Initialize market environment
             market_env = self._initialize_market_environment(data_feed)
             
-            # Create new session
-            session_id = str(datetime.now().timestamp())
-            session_stats = SessionStats(
-                session_id=session_id,
-                start_time=datetime.now(),
-                end_time=datetime.now(),
-                total_trades=0,
-                winning_trades=0,
-                losing_trades=0,
-                win_rate=0.0,
-                avg_profit=0.0,
-                max_drawdown=0.0,
-                sharpe_ratio=0.0,
-                psychological_state=self._get_initial_psychological_state(),
-                technical_state=self._get_initial_technical_state(),
-                model=None,
-                reinforcement_stats={
-                    'total_rewards': 0,
-                    'avg_reward': 0,
-                    'max_reward': float('-inf'),
-                    'min_reward': float('inf'),
-                    'episode_rewards': []
-                }
-            )
-
-            # Train with reinforcement learning (reduced iterations)
-            trained_session = await self._train_with_market_environment(
-                session_stats,
-                market_env,
-                data_feed,
-                episodes=50  # Reduced from 100 to 50
-            )
-            
-            # Update session manager
-            self.session_manager.save_session_stats(trained_session)
-            
-            return trained_session
-            
-        except Exception as e:
-            self.logger.error(f"Error during market environment training: {str(e)}")
-            raise
-
-    async def _train_with_market_environment(self,
-                                          session: SessionStats,
-                                          market_env: MarketEnvironment,
-                                          data_feed: pd.DataFrame,
-                                          episodes: int) -> SessionStats:
-        """Train model using market environment reinforcement learning"""
-        try:
-            # Initialize model using ModelBuilder
-            input_shape = (market_env.state_size,)  # Shape for RL model input
-            model = self.model_builder.build_rl_model(input_shape, market_env.action_space.n)
-            session.model = model
+            best_session = None
+            best_performance = float('-inf')
             
             # Training parameters
-            max_steps = 20  # Reduced from len(data_feed) - 1 to 20
+            n_episodes = 15
+            sessions_per_episode = 10
+            max_steps = min(20, len(data_feed) - 1)
             
-            for episode in range(episodes):
-                self.logger.info(f"Starting episode {episode + 1}/{episodes}")
-                
-                # Reset environment
-                state = market_env.reset()
-                total_reward = 0
-                
-                for step in range(max_steps):
-                    # Get action using epsilon-greedy policy
-                    if np.random.random() < self.epsilon:
-                        action = np.random.randint(market_env.action_space.n)
-                    else:
-                        # Use predict on batch to avoid TensorFlow logging
-                        state_batch = state.reshape(1, -1)
-                        q_values = model.predict_on_batch(state_batch)
-                        action = np.argmax(q_values[0])
+            try:
+                for episode in range(n_episodes):
+                    # Start new episode in session manager
+                    episode_log = self.session_manager.session_logger.start_episode(episode)
                     
-                    # Take action in environment
-                    next_state, reward, done, _, info = market_env.step(action)
-                    
-                    # Store experience and train model
-                    self._train_on_experience(
-                        model,
-                        state,
-                        action,
-                        reward,
-                        next_state,
-                        done
+                    # Initialize episode model
+                    input_shape = (market_env.state_size,)
+                    episode_model = self.model_builder.build_rl_model(
+                        input_shape,
+                        market_env.action_space.n
                     )
                     
-                    # Update state and accumulate reward
-                    state = next_state
-                    total_reward += reward
+                    for session_num in range(sessions_per_episode):
+                        session_id = f"{training_id}_e{episode}_s{session_num}"
+                        
+                        # Start new session in session manager
+                        self.session_manager.session_logger.start_session(
+                            session_id,
+                            initial_balance=100000.0
+                        )
+                        
+                        # Run training session
+                        session_result = await self._run_training_session(
+                            session_id,
+                            episode_model,
+                            market_env,
+                            data_feed,
+                            max_steps
+                        )
+                        
+                        # Update best session if better performing
+                        if session_result.sharpe_ratio > best_performance:
+                            best_session = session_result
+                            best_performance = session_result.sharpe_ratio
+                        
+                        # End session in session manager
+                        self.session_manager.session_logger.end_session(
+                            final_balance=session_result.final_balance,
+                            performance_metrics={
+                                'win_rate': session_result.win_rate,
+                                'avg_profit': session_result.avg_profit,
+                                'max_drawdown': session_result.max_drawdown,
+                                'sharpe_ratio': session_result.sharpe_ratio
+                            },
+                            psychological_state=session_result.psychological_state,
+                            technical_state=session_result.technical_state
+                        )
                     
-                    # Update session stats
-                    self._update_session_stats(session, reward, info)
+                    # End episode in session manager
+                    self.session_manager.session_logger.end_episode()
                     
-                    if done:
-                        break
+                    # Decay epsilon
+                    self.epsilon = max(0.01, self.epsilon * 0.95)
                 
-                # Update reinforcement stats
-                session.reinforcement_stats['episode_rewards'].append(total_reward)
-                session.reinforcement_stats['total_rewards'] += total_reward
-                session.reinforcement_stats['avg_reward'] = (
-                    session.reinforcement_stats['total_rewards'] / (episode + 1)
-                )
-                session.reinforcement_stats['max_reward'] = max(
-                    session.reinforcement_stats['max_reward'],
-                    total_reward
-                )
-                session.reinforcement_stats['min_reward'] = min(
-                    session.reinforcement_stats['min_reward'],
-                    total_reward
-                )
+                # End training session in session manager's logger
+                self.session_manager.session_logger.end_training_session()
                 
-                # Decay epsilon
-                self.epsilon = max(0.01, self.epsilon * 0.995)
-            
-            return session
+                # Save best session
+                if best_session:
+                    self.session_manager.save_session_stats(best_session)
+                
+                return best_session
+                
+            except Exception as e:
+                # Ensure training session is ended even if there's an error
+                self.session_manager.session_logger.end_training_session()
+                raise e
             
         except Exception as e:
-            self.logger.error(f"Error during market environment training: {str(e)}")
+            self.logger.error(f"Error during training: {str(e)}")
             raise
+
+    async def _run_training_session(self,
+                                  session_id: str,
+                                  model: Model,
+                                  market_env: MarketEnvironment,
+                                  data_feed: pd.DataFrame,
+                                  max_steps: int) -> SessionStats:
+        """Run a single training session with proper forecast handling"""
+        try:
+            # Create new trading session
+            trading_session = self.session_manager.create_new_session(
+                market_data=data_feed,
+                initial_conditions={
+                    'psychology': self._get_initial_psychological_state(),
+                    'zones': self.zone_analyzer.identify_zone(data_feed['close'].values)
+                }
+            )
+            
+            # Initialize state and tracking variables
+            state = market_env.reset()
+            total_reward = 0.0
+            session_trades = []
+            session_start_time = datetime.now()
+            
+            for step in range(max_steps):
+                # Ensure we have valid data indices
+                if step >= len(data_feed):
+                    break
+                
+                # Handle NaN states
+                if np.any(np.isnan(state)):
+                    state = np.nan_to_num(state, nan=0.0)
+                
+                # Generate forecast
+                current_data = data_feed.iloc[step]
+                forecast = self._generate_forecast(model, state, current_data)
+                
+                # Get action from forecast's best action
+                action = int(forecast['best_action'])  # Ensure integer action
+                
+                # Take action
+                next_state, reward, done, _, info = market_env.step(action)
+                
+                # Ensure valid reward
+                reward = float(np.clip(np.nan_to_num(reward, 0.0), -1.0, 1.0))
+                
+                # Store trade if executed
+                if info.get('trade_executed', False):
+                    session_trades.append(info)
+                
+                # Train on experience
+                loss = self._train_on_experience(
+                    model,
+                    state,
+                    action,
+                    reward,
+                    next_state,
+                    done
+                )
+                
+                # Log reinforcement update
+                self.session_manager.session_logger.log_reinforcement_update(
+                    state=state,
+                    action=action,
+                    reward=reward,
+                    next_state=next_state,
+                    q_values_before=forecast['q_values'],
+                    q_values_after=model.predict_on_batch(next_state.reshape(1, -1))[0].tolist(),
+                    epsilon=self.epsilon,
+                    loss=loss
+                )
+                
+                # Log forecast with safe index access
+                next_price = data_feed.iloc[step + 1]['close'] if step + 1 < len(data_feed) else None
+                self.session_manager.session_logger.log_forecast(
+                    predicted_values=forecast['values'],
+                    confidence=forecast['confidence'],
+                    technical_indicators=forecast['technical_state'],
+                    actual_value=next_price
+                )
+                
+                # Update state and reward
+                state = next_state
+                total_reward += reward
+                
+                if done:
+                    break
+            
+            # Calculate session metrics
+            session_stats = SessionStats(
+                session_id=session_id,
+                start_time=session_start_time,
+                end_time=datetime.now(),
+                total_trades=len(session_trades),
+                winning_trades=sum(1 for t in session_trades if t.get('trade_profit', 0) > 0),
+                losing_trades=sum(1 for t in session_trades if t.get('trade_profit', 0) <= 0),
+                win_rate=len([t for t in session_trades if t.get('trade_profit', 0) > 0]) / max(len(session_trades), 1),
+                avg_profit=np.mean([t.get('trade_profit', 0) for t in session_trades]) if session_trades else 0.0,
+                max_drawdown=max([abs(t.get('trade_profit', 0)) for t in session_trades]) if session_trades else 0.0,
+                sharpe_ratio=self._calculate_sharpe_ratio(session_trades),
+                psychological_state=trading_session.psychological_state,
+                technical_state=trading_session.technical_state,
+                reinforcement_stats={
+                    'total_reward': float(total_reward),
+                    'avg_reward': float(total_reward / max_steps),
+                    'final_epsilon': float(self.epsilon)
+                },
+                final_balance=trading_session.final_balance or 100000.0
+            )
+            
+            return session_stats
+            
+        except Exception as e:
+            self.logger.error(f"Error running training session: {str(e)}")
+            raise
+
+    def _calculate_sharpe_ratio(self, trades: List[Dict]) -> float:
+        """Calculate Sharpe ratio with safety checks"""
+        try:
+            if not trades:
+                return 0.0
+            
+            returns = [float(t.get('trade_profit', 0)) for t in trades]
+            if len(returns) < 2:
+                return 0.0
+            
+            returns_std = float(np.std(returns))
+            if returns_std == 0:
+                return 0.0
+            
+            return float(np.mean(returns) / returns_std)
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating Sharpe ratio: {str(e)}")
+            return 0.0
 
     def _initialize_market_environment(self, data_feed: pd.DataFrame) -> MarketEnvironment:
         """Initialize market environment with data feed"""
@@ -274,8 +383,18 @@ class TradewiseAI:
                             info: Dict):
         """Update session statistics based on step results"""
         try:
+            # Initialize reinforcement_stats if not exists
+            if not hasattr(session, 'reinforcement_stats') or session.reinforcement_stats is None:
+                session.reinforcement_stats = {
+                    'episode_rewards': [],
+                    'total_rewards': 0,
+                    'avg_reward': 0,
+                    'max_reward': float('-inf'),
+                    'min_reward': float('inf')
+                }
+
             # Update trade counts
-            if info.get('trade_executed', False):
+            if info is not None and info.get('trade_executed', False):
                 session.total_trades += 1
                 if info.get('trade_profit', 0) > 0:
                     session.winning_trades += 1
@@ -287,26 +406,37 @@ class TradewiseAI:
                 session.win_rate = session.winning_trades / session.total_trades
             
             # Update profit metrics
-            current_profit = info.get('trade_profit', 0)
-            session.avg_profit = (
-                (session.avg_profit * (session.total_trades - 1) + current_profit)
-                / session.total_trades if session.total_trades > 0 else 0
-            )
+            current_profit = info.get('trade_profit', 0) if info is not None else 0
+            if session.total_trades > 0:
+                session.avg_profit = (
+                    (session.avg_profit * (session.total_trades - 1) + current_profit)
+                    / session.total_trades
+                )
             
             # Update drawdown
-            if info.get('drawdown', 0) > session.max_drawdown:
+            if info is not None and info.get('drawdown', 0) > session.max_drawdown:
                 session.max_drawdown = info['drawdown']
             
-            # Update Sharpe ratio
+            # Update Sharpe ratio if we have enough rewards
             if len(session.reinforcement_stats['episode_rewards']) > 1:
                 returns = np.array(session.reinforcement_stats['episode_rewards'])
                 session.sharpe_ratio = (
                     np.mean(returns) / np.std(returns) if np.std(returns) > 0 else 0
                 )
             
+            # Log the updates
+            logger = logging.getLogger(f'session_{session.session_id}')
+            logger.debug(
+                f"Updated stats - Trades: {session.total_trades}, "
+                f"Win Rate: {session.win_rate:.2%}, "
+                f"Avg Profit: {session.avg_profit:.2%}"
+            )
+            
         except Exception as e:
-            self.logger.error(f"Error updating session stats: {str(e)}")
-            raise
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error updating session stats: {str(e)}")
+            # Don't raise the exception to allow training to continue
+            # but log it for debugging
 
     async def predict(self, data_feed: pd.DataFrame) -> List[Dict]:
         """Generate predictions using best performing session"""
@@ -779,28 +909,6 @@ class TradewiseAI:
             self.logger.error(f"Error preparing prediction features: {str(e)}")
             return pd.DataFrame()
 
-    def _update_features(self, last_features: np.ndarray, prediction: float) -> np.ndarray:
-        """Update feature vector with new prediction"""
-        try:
-            new_features = last_features.copy()
-            
-            # Update close price
-            new_features[0] = prediction
-            
-            # Update returns
-            new_features[1] = (prediction - last_features[0]) / last_features[0]
-            
-            # Update volatility (simple approximation)
-            new_features[2] = abs(new_features[1])
-            
-            # Keep other features unchanged for now
-            # In a more sophisticated implementation, you would update RSI, MACD, etc.
-            
-            return new_features
-            
-        except Exception as e:
-            self.logger.error(f"Error updating features: {str(e)}")
-            return last_features
 
     def _calculate_trend_strength(self, df: pd.DataFrame) -> float:
         """Calculate the strength of the price trend"""
@@ -1005,6 +1113,525 @@ class TradewiseAI:
         except Exception as e:
             self.logger.error(f"Error saving session: {str(e)}")
             raise
+
+    def _setup_session_logging(self, session_id: str) -> logging.Logger:
+        """Setup session-specific logging"""
+        try:
+            # Create session log directory
+            session_log_dir = os.path.join(self.log_dir, 'sessions', session_id)
+            os.makedirs(session_log_dir, exist_ok=True)
+            
+            # Create session-specific log file
+            log_file = os.path.join(session_log_dir, 'session.log')
+            
+            # Create session logger
+            session_logger = logging.getLogger(f'session_{session_id}')
+            session_logger.setLevel(logging.INFO)
+            
+            # Create handlers
+            file_handler = logging.FileHandler(log_file)
+            console_handler = logging.StreamHandler()
+            
+            # Create formatter
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            
+            # Set formatter for handlers
+            file_handler.setFormatter(formatter)
+            console_handler.setFormatter(formatter)
+            
+            # Add handlers to logger
+            session_logger.addHandler(file_handler)
+            session_logger.addHandler(console_handler)
+            
+            return session_logger
+            
+        except Exception as e:
+            self.logger.error(f"Error setting up session logging: {str(e)}")
+            raise
+
+    def _save_session_report(self, session: SessionStats):  # Removed logger parameter
+        """Generate and save final session report"""
+        try:
+            # Get logger for this session
+            logger = logging.getLogger(f'session_{session.session_id}')
+            
+            # Create report directory
+            report_dir = os.path.join(self.log_dir, 'sessions', session.session_id, 'reports')
+            os.makedirs(report_dir, exist_ok=True)
+            
+            # Generate report content
+            report = {
+                'session_summary': {
+                    'id': session.session_id,
+                    'start_time': session.start_time.isoformat(),
+                    'end_time': session.end_time.isoformat(),
+                    'duration': str(session.end_time - session.start_time)
+                },
+                'performance_metrics': {
+                    'total_trades': session.total_trades,
+                    'winning_trades': session.winning_trades,
+                    'losing_trades': session.losing_trades,
+                    'win_rate': f"{session.win_rate:.2%}",
+                    'avg_profit': f"{session.avg_profit:.2%}",
+                    'max_drawdown': f"{session.max_drawdown:.2%}",
+                    'sharpe_ratio': f"{session.sharpe_ratio:.2f}"
+                },
+                'reinforcement_stats': session.reinforcement_stats,
+                'psychological_state': session.psychological_state,
+                'technical_state': session.technical_state
+            }
+            
+            # Save JSON report
+            report_file = os.path.join(report_dir, 'final_report.json')
+            with open(report_file, 'w') as f:
+                import json
+                json.dump(report, f, indent=4)
+                
+            # Save human-readable summary
+            summary_file = os.path.join(report_dir, 'summary.txt')
+            with open(summary_file, 'w') as f:
+                f.write("Trading Session Summary\n")
+                f.write("=====================\n\n")
+                f.write(f"Session ID: {session.session_id}\n")
+                f.write(f"Duration: {session.end_time - session.start_time}\n\n")
+                f.write("Performance Metrics\n")
+                f.write("-----------------\n")
+                f.write(f"Total Trades: {session.total_trades}\n")
+                f.write(f"Win Rate: {session.win_rate:.2%}\n")
+                f.write(f"Average Profit: {session.avg_profit:.2%}\n")
+                f.write(f"Max Drawdown: {session.max_drawdown:.2%}\n")
+                f.write(f"Sharpe Ratio: {session.sharpe_ratio:.2f}\n")
+            
+            logger.info(f"Session report saved to {report_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving session report: {str(e)}")
+            raise
+
+    def _generate_forecast(self, 
+                          model: Model, 
+                          state: np.ndarray, 
+                          current_data: pd.Series) -> Dict:
+        """
+        Generate forecast from current state including price predictions,
+        confidence metrics, and technical analysis.
+        
+        Args:
+            model: The trained model to use for predictions
+            state: Current market state as numpy array
+            current_data: Current market data as pandas Series
+        
+        Returns:
+            Dict containing predictions, confidence scores, and analysis
+        """
+        try:
+            # Validate inputs
+            if model is None:
+                raise ValueError("Model cannot be None")
+            if state is None or len(state) == 0:
+                raise ValueError("Invalid state array")
+            if current_data is None or 'close' not in current_data:
+                raise ValueError("Invalid current data")
+
+            # Ensure state is properly shaped and handle NaN values
+            state_cleaned = np.nan_to_num(state.reshape(1, -1), nan=0.0)
+            
+            # Get Q-values for all actions
+            try:
+                q_values = model.predict_on_batch(state_cleaned)[0]
+            except Exception as e:
+                self.logger.error(f"Error getting Q-values from model: {str(e)}")
+                q_values = np.zeros(3)  # Default to 3 actions: HOLD, BUY, SELL
+
+            # Define action mapping with expected price movements
+            action_mapping = {
+                0: {'name': 'HOLD', 'movement': 0.0},
+                1: {'name': 'BUY', 'movement': 0.01},  # 1% up movement
+                2: {'name': 'SELL', 'movement': -0.01}  # 1% down movement
+            }
+
+            # Get best action and its index
+            best_action_idx = int(np.argmax(q_values))
+            predicted_movement = action_mapping[best_action_idx]['movement']
+
+            # Get current price and ensure it's valid
+            try:
+                current_price = float(current_data['close'])
+                if not np.isfinite(current_price):
+                    raise ValueError("Invalid current price")
+            except Exception as e:
+                self.logger.error(f"Error getting current price: {str(e)}")
+                current_price = 0.0
+
+            # Generate multiple price predictions with increasing uncertainty
+            predictions = []
+            volatility = self._calculate_volatility(current_data)
+            
+            for i in range(1, 4):  # Generate 3 future predictions
+                # Increase movement impact and uncertainty with time
+                time_factor = i * 1.5
+                movement_with_uncertainty = predicted_movement * time_factor
+                
+                # Add volatility-based noise
+                noise = np.random.normal(0, volatility * i * 0.1)
+                
+                # Calculate predicted price
+                predicted_price = current_price * (1 + movement_with_uncertainty + noise)
+                predictions.append(float(np.clip(predicted_price, current_price * 0.9, current_price * 1.1)))
+
+            # Calculate confidence metrics
+            q_max = float(np.max(q_values))
+            q_mean = float(np.mean(q_values))
+            q_std = float(np.std(q_values))
+            
+            # Confidence based on Q-value separation and consistency
+            q_confidence = float(np.clip((q_max - q_mean) / (q_std if q_std > 0 else 1), 0, 1))
+            
+            # Get technical analysis state
+            technical_state = self._calculate_technical_state(
+                pd.DataFrame([current_data])
+            )
+            
+            # Adjust confidence based on technical indicators
+            technical_confidence = self._calculate_technical_confidence(technical_state)
+            
+            # Combined confidence score
+            confidence = float(np.clip((q_confidence + technical_confidence) / 2, 0, 1))
+
+            # Create forecast dictionary
+            forecast = {
+                'values': predictions,
+                'confidence': confidence,
+                'technical_state': technical_state,
+                'best_action': best_action_idx,
+                'action_name': action_mapping[best_action_idx]['name'],
+                'q_values': q_values.tolist(),
+                'metadata': {
+                    'q_confidence': q_confidence,
+                    'technical_confidence': technical_confidence,
+                    'volatility': volatility,
+                    'timestamp': datetime.now().isoformat()
+                }
+            }
+
+            # Log forecast generation
+            self.logger.debug(
+                f"Generated forecast - Action: {forecast['action_name']}, "
+                f"Confidence: {confidence:.2f}, "
+                f"Predictions: {predictions}"
+            )
+
+            return forecast
+
+        except Exception as e:
+            self.logger.error(f"Error generating forecast: {str(e)}")
+            # Return safe default forecast
+            return {
+                'values': [float(current_data.get('close', 0))] * 3,
+                'confidence': 0.0,
+                'technical_state': {},
+                'best_action': 0,  # HOLD
+                'action_name': 'HOLD',
+                'q_values': [0.0, 0.0, 0.0],
+                'metadata': {
+                    'q_confidence': 0.0,
+                    'technical_confidence': 0.0,
+                    'volatility': 0.0,
+                    'timestamp': datetime.now().isoformat(),
+                    'error': str(e)
+                }
+            }
+
+    def _calculate_volatility(self, data: pd.Series) -> float:
+        """Calculate price volatility from recent data"""
+        try:
+            if 'close' not in data:
+                return 0.0
+            
+            # If we have historical data in the series
+            if isinstance(data['close'], (pd.Series, np.ndarray)):
+                returns = np.diff(data['close']) / data['close'][:-1]
+                return float(np.std(returns))
+            
+            return 0.0
+        except Exception as e:
+            self.logger.error(f"Error calculating volatility: {str(e)}")
+            return 0.0
+
+    def _calculate_technical_confidence(self, technical_state: Dict) -> float:
+        """Calculate confidence score based on technical indicators"""
+        try:
+            confidence_scores = []
+            
+            # Trend strength confidence
+            if 'trend' in technical_state:
+                trend_strength = abs(technical_state['trend'].get('strength', 0))
+                confidence_scores.append(trend_strength)
+            
+            # Momentum confidence
+            if 'momentum' in technical_state:
+                momentum = technical_state['momentum']
+                # RSI confidence (higher near extremes)
+                rsi = momentum.get('rsi', 50)
+                rsi_confidence = abs(rsi - 50) / 50
+                confidence_scores.append(rsi_confidence)
+                
+                # MACD confidence
+                macd = abs(momentum.get('macd', 0))
+                macd_confidence = min(macd / 2, 1.0)  # Normalize MACD
+                confidence_scores.append(macd_confidence)
+            
+            # Calculate final confidence
+            if confidence_scores:
+                return float(np.mean(confidence_scores))
+            return 0.5  # Default moderate confidence
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating technical confidence: {str(e)}")
+            return 0.5
+
+    def _calculate_session_metrics(self,
+                                session_id: str,
+                                trades: List[Dict],
+                                forecasts: List[Dict],
+                                total_reward: float,
+                                initial_balance: float) -> SessionStats:
+        """
+        Calculate comprehensive session metrics with safety checks.
+        
+        Args:
+            session_id: Unique identifier for the session
+            trades: List of trade dictionaries containing profit/loss info
+            forecasts: List of forecast dictionaries with predictions
+            total_reward: Total reinforcement learning reward for session
+            initial_balance: Starting balance for the session
+        
+        Returns:
+            SessionStats object containing all calculated metrics
+        """
+        try:
+            # Initialize timing
+            start_time = datetime.now() - timedelta(hours=1)  # Assume 1 hour session
+            end_time = datetime.now()
+            
+            # Trade Performance Metrics
+            total_trades = len(trades)
+            winning_trades = sum(1 for t in trades if t.get('trade_profit', 0) > 0)
+            losing_trades = total_trades - winning_trades
+            
+            # Win Rate Calculation
+            win_rate = winning_trades / max(total_trades, 1)  # Avoid division by zero
+            
+            # Profit Metrics
+            profits = [t.get('trade_profit', 0) for t in trades]
+            avg_profit = float(np.mean(profits)) if profits else 0.0
+            total_profit = float(np.sum(profits))
+            
+            # Risk Metrics
+            max_profit = float(max(profits)) if profits else 0.0
+            max_loss = float(min(profits)) if profits else 0.0
+            profit_factor = (
+                abs(sum(p for p in profits if p > 0)) / 
+                abs(sum(p for p in profits if p < 0))
+                if any(p < 0 for p in profits) else float('inf')
+            )
+
+            # Calculate Running Balance and Drawdown
+            balance_curve = [initial_balance]
+            peak = initial_balance
+            drawdowns = []
+            
+            for trade in trades:
+                profit = trade.get('trade_profit', 0)
+                current_balance = balance_curve[-1] * (1 + profit)
+                balance_curve.append(current_balance)
+                
+                peak = max(peak, current_balance)
+                drawdown = (peak - current_balance) / peak
+                drawdowns.append(drawdown)
+            
+            # Maximum Drawdown
+            max_drawdown = float(max(drawdowns)) if drawdowns else 0.0
+            
+            # Calculate Returns
+            returns = np.diff(balance_curve) / balance_curve[:-1]
+            
+            # Risk-Adjusted Metrics
+            try:
+                sharpe_ratio = float(
+                    np.mean(returns) / np.std(returns) * np.sqrt(252)  # Annualized
+                    if len(returns) > 1 and np.std(returns) > 0 else 0.0
+                )
+                
+                sortino_ratio = float(
+                    np.mean(returns) / np.std([r for r in returns if r < 0]) * np.sqrt(252)
+                    if any(r < 0 for r in returns) else float('inf')
+                )
+            except Exception as e:
+                self.logger.warning(f"Error calculating risk metrics: {str(e)}")
+                sharpe_ratio = 0.0
+                sortino_ratio = 0.0
+            
+            # Forecast Performance
+            if forecasts:
+                forecast_accuracy = np.mean([
+                    f['confidence'] for f in forecasts
+                    if isinstance(f.get('confidence'), (int, float))
+                ])
+                
+                directional_accuracy = np.mean([
+                    1 if (f.get('best_action') == 1 and t.get('trade_profit', 0) > 0) or
+                        (f.get('best_action') == 2 and t.get('trade_profit', 0) < 0) else 0
+                    for f, t in zip(forecasts, trades)
+                    if f.get('best_action') in [1, 2]  # Only count BUY/SELL predictions
+                ]) if trades and forecasts else 0.0
+            else:
+                forecast_accuracy = 0.0
+                directional_accuracy = 0.0
+            
+            # Get final psychological and technical states
+            final_psych_state = self._get_final_psychological_state(trades, forecasts)
+            final_tech_state = self._get_final_technical_state(trades, forecasts)
+            
+            # Calculate reinforcement learning metrics
+            rl_metrics = {
+                'total_reward': float(total_reward),
+                'avg_reward': float(total_reward / max(len(forecasts), 1)),
+                'final_epsilon': float(self.epsilon),
+                'forecast_accuracy': float(forecast_accuracy),
+                'directional_accuracy': float(directional_accuracy)
+            }
+            
+            # Create comprehensive session statistics
+            session_stats = SessionStats(
+                session_id=session_id,
+                start_time=start_time,
+                end_time=end_time,
+                total_trades=total_trades,
+                winning_trades=winning_trades,
+                losing_trades=losing_trades,
+                win_rate=win_rate,
+                avg_profit=avg_profit,
+                max_drawdown=max_drawdown,
+                sharpe_ratio=sharpe_ratio,
+                psychological_state=final_psych_state,
+                technical_state=final_tech_state,
+                reinforcement_stats=rl_metrics,
+                prediction_accuracy=forecast_accuracy,
+                model=None,  # Model can be attached later if needed
+            )
+            
+            # Additional metrics for logging
+            extended_metrics = {
+                'total_profit': total_profit,
+                'profit_factor': profit_factor,
+                'max_profit': max_profit,
+                'max_loss': max_loss,
+                'sortino_ratio': sortino_ratio,
+                'final_balance': balance_curve[-1],
+                'return_pct': (balance_curve[-1] - initial_balance) / initial_balance * 100,
+                'avg_trade_duration': np.mean([
+                    t.get('duration', 0) for t in trades
+                    if isinstance(t.get('duration'), (int, float))
+                ]) if trades else 0
+            }
+            
+            # Log detailed metrics
+            self.logger.info(
+                f"Session {session_id} metrics calculated:\n"
+                f"Win Rate: {win_rate:.2%}\n"
+                f"Total Profit: {total_profit:.2f}\n"
+                f"Max Drawdown: {max_drawdown:.2%}\n"
+                f"Sharpe Ratio: {sharpe_ratio:.2f}\n"
+                f"Forecast Accuracy: {forecast_accuracy:.2%}"
+            )
+            
+            # Store extended metrics in session manager
+            self.session_manager.store_extended_metrics(session_id, extended_metrics)
+            
+            return session_stats
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating session metrics: {str(e)}")
+            # Return safe default metrics
+            return SessionStats(
+                session_id=session_id,
+                start_time=datetime.now() - timedelta(hours=1),
+                end_time=datetime.now(),
+                total_trades=0,
+                winning_trades=0,
+                losing_trades=0,
+                win_rate=0.0,
+                avg_profit=0.0,
+                max_drawdown=0.0,
+                sharpe_ratio=0.0,
+                psychological_state=self._get_initial_psychological_state(),
+                technical_state=self._get_initial_technical_state(),
+                reinforcement_stats={'total_reward': 0.0, 'avg_reward': 0.0},
+                prediction_accuracy=0.0
+            )
+
+    def _get_final_psychological_state(self, trades: List[Dict], forecasts: List[Dict]) -> Dict:
+        """Calculate final psychological state based on trading performance"""
+        try:
+            # Base confidence on recent performance
+            recent_trades = trades[-10:] if len(trades) > 10 else trades
+            recent_win_rate = np.mean([
+                1 if t.get('trade_profit', 0) > 0 else 0 
+                for t in recent_trades
+            ]) if recent_trades else 0.5
+            
+            # Calculate stress level based on drawdowns
+            recent_drawdowns = [t.get('drawdown', 0) for t in recent_trades]
+            stress_level = float(np.mean(recent_drawdowns)) if recent_drawdowns else 0.3
+            
+            # Calculate risk tolerance based on position sizes
+            position_sizes = [t.get('position_size', 0) for t in recent_trades]
+            risk_tolerance = float(np.mean(position_sizes)) if position_sizes else 0.5
+            
+            return {
+                'confidence': float(recent_win_rate),
+                'emotional_balance': float(max(0, 1 - stress_level)),
+                'risk_tolerance': float(risk_tolerance),
+                'stress_level': float(stress_level)
+            }
+        except Exception as e:
+            self.logger.error(f"Error calculating psychological state: {str(e)}")
+            return self._get_initial_psychological_state()
+
+    def _get_final_technical_state(self, trades: List[Dict], forecasts: List[Dict]) -> Dict:
+        """Calculate final technical state based on recent market conditions"""
+        try:
+            # Use most recent forecast's technical state if available
+            if forecasts and 'technical_state' in forecasts[-1]:
+                return forecasts[-1]['technical_state']
+            
+            # Fallback to calculating from trades
+            recent_prices = [t.get('price', 0) for t in trades[-20:]]
+            if len(recent_prices) > 1:
+                trend_direction = 'up' if recent_prices[-1] > recent_prices[0] else 'down'
+                trend_strength = abs(recent_prices[-1] - recent_prices[0]) / recent_prices[0]
+                
+                return {
+                    'trend': {
+                        'direction': trend_direction,
+                        'strength': float(trend_strength)
+                    },
+                    'momentum': float(trend_strength),
+                    'volatility': float(np.std(recent_prices) / np.mean(recent_prices))
+                }
+                
+            return self._get_initial_technical_state()
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating technical state: {str(e)}")
+            return self._get_initial_technical_state()
+
+
+
+
 
 
 

@@ -25,6 +25,7 @@ class TradingSession:
         self.risk_per_trade = risk_per_trade
         self.session_duration = session_duration
         self.current_interval = 0
+        self.final_balance = None  # Add this line to track final balance
         
         # Session states
         self.psychological_state = {}
@@ -42,12 +43,13 @@ class TradingSession:
                          market_data: pd.DataFrame,
                          zones: Dict):
         """Initialize a new trading session"""
-        self.psychological_state = initial_psychology
+        self.psychological_state = initial_psychology  # Changed from psychology to initial_psychology
         self.technical_state = self._analyze_technical_state(market_data)
         self.zone_state = self._analyze_zone_state(market_data, zones)
         self.current_interval = 0
         self.balance = self.initial_balance
         self.position = None
+        self.final_balance = None
         
         # Record initial state
         self._record_state()
@@ -103,6 +105,10 @@ class TradingSession:
         # Process any open positions
         if self.position is not None:
             self._process_position(new_price)
+            
+        # Update final balance if session is ending
+        if self.current_interval >= self.session_duration:
+            self.final_balance = self.balance
         
         # Record updated state
         self._record_state()
@@ -160,14 +166,15 @@ class TradingSession:
             
     def _record_state(self):
         """Record current session state"""
-        self.state_history.append({
+        state = {
             'interval': self.current_interval,
             'psychological_state': self.psychological_state.copy(),
             'technical_state': self.technical_state.copy(),
             'zone_state': self.zone_state.copy(),
             'balance': self.balance,
             'has_position': self.position is not None
-        })
+        }
+        self.state_history.append(state)
         
     def _generate_session_insights(self) -> Dict:
         """Generate insights from current session state"""
@@ -337,3 +344,4 @@ class TradingSession:
                                sum(pnl for pnl in pnls if pnl < 0)) if any(pnl < 0 for pnl in pnls) else float('inf'),
             'psychological_stability': self.psychological_state.get('emotional_balance', 0.5)
         }
+
