@@ -52,7 +52,7 @@ async def generate_trade_suggestions(request: TradeSuggestionRequest):
         suggestion = await use_case.generate_suggestion_for_stock(request.symbol)
         return suggestion
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error generating suggestions: {str(e)}")
 
 @app.get("/api/tradewise/suggestions/top/{limit}")
 async def get_top_suggestions(limit: int = 5):
@@ -122,7 +122,9 @@ async def websocket_endpoint(websocket: WebSocket):
             suggestions = await tradewise_ai.generate_trade_suggestions(latest_data)
             await websocket.send_json(suggestions[0].dict())
     except WebSocketDisconnect:
-        print("WebSocket disconnected")
+        logging.info("WebSocket disconnected")
+    except Exception as e:
+        logging.error(f"WebSocket error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

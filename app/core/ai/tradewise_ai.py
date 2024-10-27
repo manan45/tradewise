@@ -1,12 +1,11 @@
 import os
 import logging
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
+import json
 import pandas as pd
 import numpy as np
-from decimal import Decimal
 from dataclasses import dataclass
-import json
 
 from .technical_indicators import TechnicalIndicatorCalculator
 from .market_environment import MarketEnvironment
@@ -78,7 +77,8 @@ class TradewiseAI:
         self.logger.setLevel(logging.INFO)
         
         # File handler
-        fh = logging.FileHandler(os.path.join(self.log_dir, f'tradewise_{datetime.now().strftime("%Y%m%d")}.log'))
+        log_filename = os.path.join(self.log_dir, f'tradewise_{datetime.now().strftime("%Y%m%d")}.log')
+        fh = logging.FileHandler(log_filename)
         fh.setLevel(logging.INFO)
         
         # Console handler
@@ -120,8 +120,11 @@ class TradewiseAI:
             
             return suggestions
             
+        except ValueError as ve:
+            self.logger.error(f"ValueError: {str(ve)}")
+            raise
         except Exception as e:
-            self.logger.error(f"Error generating suggestions for {symbol}: {str(e)}")
+            self.logger.error(f"Unexpected error: {str(e)}")
             raise
 
     async def get_session_stats(self, session_id: Optional[str] = None) -> List[SessionStats]:
