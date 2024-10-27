@@ -223,7 +223,7 @@ class TradewiseAI:
                 action = int(forecast['best_action'])  # Ensure integer action
                 
                 # Take action
-                next_state, reward, done, _, info = market_env.step(action)
+                next_state, reward, done, info = market_env.step(action)
                 
                 # Ensure valid reward
                 reward = float(np.clip(np.nan_to_num(reward, 0.0), -1.0, 1.0))
