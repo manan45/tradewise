@@ -229,7 +229,7 @@ class TradewiseAI:
                 reward = float(np.clip(np.nan_to_num(reward, 0.0), -1.0, 1.0))
                 
                 # Store trade if executed
-                if info.get('trade_executed', False):
+                if isinstance(info, dict) and info.get('trade_executed', False):
                     session_trades.append(info)
                 
                 # Train on experience
