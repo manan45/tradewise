@@ -1,3 +1,8 @@
+from app.core.ai.market_psychology import PsychologyPatternAnalyzer
+from app.core.ai.technical_analyzer import TechnicalPatternAnalyzer
+from app.core.ai.zone_analyzer import ZonePatternAnalyzer
+
+
 class SessionManager:
     """Manages multiple trading sessions and extracts learning patterns"""
     
@@ -122,24 +127,55 @@ class SessionManager:
     def get_session_recommendations(self, 
                                   current_market_state: Dict,
                                   psychological_state: Dict) -> Dict:
-        """Generate trading recommendations based on learned patterns"""
-        recommendations = {
-            'psychological_adjustments': self._get_psychological_recommendations(
-                psychological_state
-            ),
-            'technical_setups': self._get_technical_recommendations(
-                current_market_state
-            ),
-            'zone_strategies': self._get_zone_recommendations(
-                current_market_state
-            ),
-            'risk_adjustments': self._get_risk_recommendations(
-                psychological_state,
-                current_market_state
-            )
-        }
+        """
+        Generate comprehensive trading recommendations based on current market and psychological states
         
-        return recommendations
+        Args:
+            current_market_state: Current market technical and zone state
+            psychological_state: Current psychological patterns and state
+        
+        Returns:
+            Dict containing recommendations for different aspects of trading
+        """
+        try:
+            # Get base recommendations from different components
+            psychological_recs = self._get_psychological_recommendations(psychological_state)
+            technical_recs = self._get_technical_recommendations(current_market_state)
+            zone_recs = self._get_zone_recommendations(current_market_state)
+            risk_recs = self._get_risk_recommendations(psychological_state, current_market_state)
+            
+            # Combine recommendations
+            recommendations = {
+                'psychological_adjustments': psychological_recs,
+                'technical_setups': technical_recs,
+                'zone_strategies': zone_recs,
+                'risk_adjustments': risk_recs,
+                'summary': self._generate_recommendation_summary(
+                    psychological_recs,
+                    technical_recs,
+                    zone_recs,
+                    risk_recs
+                )
+            }
+            
+            # Add session-specific advice
+            recommendations['session_advice'] = self._generate_session_advice(
+                current_market_state,
+                psychological_state,
+                recommendations
+            )
+            
+            return recommendations
+            
+        except Exception as e:
+            logging.error(f"Error generating session recommendations: {str(e)}")
+            return {
+                'psychological_adjustments': {},
+                'technical_setups': {},
+                'zone_strategies': {},
+                'risk_adjustments': {},
+                'summary': "Error generating recommendations"
+            }
     
     def _get_psychological_recommendations(self, psych_state: Dict) -> Dict:
         """Generate psychological recommendations"""
@@ -283,14 +319,110 @@ class SessionManager:
         # Implement session archival logic
         pass
 
-class PsychologyPatternAnalyzer:
-    """Analyzes psychological patterns in trading sessions"""
-    # Implementation details
+    def _generate_recommendation_summary(self,
+                                       psych_recs: Dict,
+                                       tech_recs: Dict,
+                                       zone_recs: Dict,
+                                       risk_recs: Dict) -> Dict:
+        """Generate a summary of all recommendations"""
+        summary = {
+            'primary_focus': self._determine_primary_focus(
+                psych_recs,
+                tech_recs,
+                zone_recs
+            ),
+            'risk_stance': self._determine_risk_stance(risk_recs),
+            'key_actions': []
+        }
+        
+        # Add psychological actions
+        if 'emotional' in psych_recs:
+            summary['key_actions'].append(psych_recs['emotional']['action'])
+        
+        # Add technical actions
+        for setup in tech_recs.values():
+            if setup.get('confidence', 0) > 0.7:
+                summary['key_actions'].append(setup['suggested_action'])
+        
+        # Add zone actions
+        for strategy in zone_recs.values():
+            if strategy.get('strength', 0) > 0.7:
+                summary['key_actions'].append(strategy['suggested_strategy'])
+        
+        return summary
 
-class TechnicalPatternAnalyzer:
-    """Analyzes technical patterns in trading sessions"""
-    # Implementation details
+    def _generate_session_advice(self,
+                               market_state: Dict,
+                               psych_state: Dict,
+                               recommendations: Dict) -> Dict:
+        """Generate session-specific trading advice"""
+        # Reference TradingSession._generate_trading_advice implementation
+        confidence = psych_state.get('confidence_patterns', {}).get('current', 0.5)
+        emotional_balance = psych_state.get('emotional_patterns', {}).get('stability', 0.5)
+        trend_strength = market_state.get('technical_state', {}).get('trend', {}).get('strength', 0.5)
+        
+        state_assessment = {
+            'confidence': 'high' if confidence > 0.7 else 'low' if confidence < 0.3 else 'moderate',
+            'emotional': 'balanced' if 0.4 <= emotional_balance <= 0.6 else 'extreme',
+            'trend': 'strong' if trend_strength > 0.7 else 'weak' if trend_strength < 0.3 else 'moderate'
+        }
+        
+        return {
+            'state_assessment': state_assessment,
+            'trade_frequency': self._get_trade_frequency_advice(state_assessment),
+            'position_sizing': self._get_position_sizing_advice(
+                state_assessment,
+                recommendations['risk_adjustments']
+            ),
+            'focus_areas': self._get_focus_areas(state_assessment, market_state)
+        }
 
-class ZonePatternAnalyzer:
-    """Analyzes price zone patterns in trading sessions"""
-    # Implementation details
+    def _generate_session_insights(self) -> Dict:
+        """Generate insights from current session state"""
+        return {
+            'session_state': {
+                'interval': self.current_interval,
+                'psychological': {
+                    'confidence': self.psychological_state.get('confidence', 0.5),
+                    'emotional_balance': self.psychological_state.get('emotional_balance', 0.5)
+                },
+                'technical': {
+                    'trend_direction': self.technical_state['trend']['direction'],
+                    'trend_strength': self.technical_state['trend']['strength']
+                },
+                'zones': {
+                    'in_support': self.zone_state['in_support_zone'],
+                    'in_resistance': self.zone_state['in_resistance_zone']
+                }
+            },
+            'trading_advice': self._generate_trading_advice(),
+            'risk_advice': self._generate_risk_advice(),
+            'performance': self._calculate_performance_metrics()
+        }
+    
+    def _generate_trading_advice(self) -> Dict:
+        """Generate trading advice based on current state"""
+        confidence = self.psychological_state.get('confidence', 0.5)
+        emotional_balance = self.psychological_state.get('emotional_balance', 0.5)
+        trend_strength = self.technical_state['trend']['strength']
+        
+        # Base state assessment
+        state_assessment = {
+            'confidence': 'high' if confidence > 0.7 else 'low' if confidence < 0.3 else 'moderate',
+            'emotional': 'balanced' if 0.4 <= emotional_balance <= 0.6 else 'extreme',
+            'trend': 'strong' if trend_strength > 0.7 else 'weak' if trend_strength < 0.3 else 'moderate'
+        }
+        
+        # Generate advice
+        advice = {
+            'entry_conditions': self._get_entry_conditions(),
+            'position_sizing': self._get_position_sizing_advice(),
+            'psychological_adjustment': self._get_psychological_adjustment()
+        }
+        
+        return {
+            'state_assessment': state_assessment,
+            'advice': advice
+        }
+
+

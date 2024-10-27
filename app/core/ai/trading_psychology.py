@@ -1,4 +1,7 @@
- class TradingPsychology:
+import logging
+
+
+class TradingPsychology:
     """Analyzes and manages trading psychology based on market conditions"""
     
     def __init__(self):
@@ -299,3 +302,6 @@
         except Exception as e:
             logging.error(f"Error adjusting psychological state: {str(e)}")
             return current_state
+
+
+

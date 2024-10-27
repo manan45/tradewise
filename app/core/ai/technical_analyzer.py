@@ -147,3 +147,4 @@ class TechnicalPatternAnalyzer:
         )
         
         return float(np.clip(strength, 0, 1))
+
