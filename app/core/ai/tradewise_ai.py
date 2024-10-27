@@ -226,22 +226,22 @@ class TechnicalIndicatorCalculator:
     
     def _calculate_fibonacci_levels(self, df: pd.DataFrame):
         """Calculate Fibonacci retracement levels"""
-        high = df['high'].rolling(window=20).max()
-        low = df['low'].rolling(window=20).min()
-        diff = high - low
+        # high = df['high'].rolling(window=20).max()
+        # low = df['low'].rolling(window=20).min()
+        # diff = high - low
         
-        # Standard Fibonacci levels
-        fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
-        for level in fib_levels:
-            df[f'fib_{int(level*100)}'] = low + level * diff
+        # # Standard Fibonacci levels
+        # fib_levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
+        # for level in fib_levels:
+        #     df[f'fib_{int(level*100)}'] = low + level * diff
         
-        # Calculate distance to closest Fibonacci level
-        def find_closest_fib(row):
-            levels = [row[f'fib_{int(level*100)}'] for level in fib_levels]
-            return min(levels, key=lambda x: abs(x - row['close']))
+        # # Calculate distance to closest Fibonacci level
+        # def find_closest_fib(row):
+        #     levels = [row[f'fib_{int(level*100)}'] for level in fib_levels]
+        #     return min(levels, key=lambda x: abs(x - row['close']))
         
-        df['closest_fib'] = df.apply(find_closest_fib, axis=1)
-        df['fib_ratio'] = self.safe_divide(df['close'] - df['fib_0'], df['fib_100'] - df['fib_0'])
+        # df['closest_fib'] = df.apply(find_closest_fib, axis=1)
+        # df['fib_ratio'] = self.safe_divide(df['close'] - df['fib_0'], df['fib_100'] - df['fib_0'])
     
     def _calculate_composite_indicators(self, df: pd.DataFrame):
         """Calculate custom composite indicators"""
@@ -479,6 +479,21 @@ class TradewiseAI:
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
 
+    def calculate_sentiment(self, df: pd.DataFrame) -> float:
+        """
+        Calculate a sentiment score based on recent price movements or external data.
+        
+        Args:
+            df: DataFrame with recent price data.
+        
+        Returns:
+            A float representing the sentiment score.
+        """
+        # Example: Simple sentiment based on recent price change
+        recent_change = df['close'].pct_change().tail(10).mean()
+        sentiment_score = np.clip(recent_change * 100, -1, 1)  # Scale to [-1, 1]
+        return sentiment_score
+
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate technical indicators for the given price data"""
         return self.indicator_calculator.calculate_indicators(df)
@@ -574,6 +589,7 @@ class TradewiseAI:
     def generate_forecast(self, current_data: pd.DataFrame, hours_ahead: int = 5) -> List[Dict]:
         try:
             df_indicators = self.calculate_indicators(current_data)
+            sentiment_score = self.calculate_sentiment(current_data)
             
             recent_data = df_indicators[self.features].tail(self.lookback_period)
             recent_data = recent_data.replace([np.inf, -np.inf], np.nan).ffill().bfill().fillna(0)
@@ -605,6 +621,12 @@ class TradewiseAI:
                 state = self._get_state(latest_indicators)
                 action, _ = self.rl_model.predict(state)
                 
+                # Adjust action based on sentiment
+                if sentiment_score > 0.5:
+                    action = 0  # Bias towards Buy
+                elif sentiment_score < -0.5:
+                    action = 1  # Bias towards Sell
+
                 scenario = self._analyze_scenario(
                     current_price,
                     Decimal(str(price_pred)),
@@ -857,12 +879,17 @@ class TradewiseAI:
             
             current_data = df[-120:]
             
-            # Generate forecasts
+            sentiment_score = self.calculate_sentiment(current_data)
             forecast_data = self.generate_timeseries_forecast(current_data)
             
             # Format suggestions
             suggestions = []
             for i, forecast in enumerate(forecast_data['forecasts'], 1):
+                if sentiment_score > 0.5:
+                    suggestion['Action'] = 'BUY'
+                elif sentiment_score < -0.5:
+                    suggestion['Action'] = 'SELL'
+
                 suggestion = {
                     'id': i,
                     'timestamp': forecast['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
