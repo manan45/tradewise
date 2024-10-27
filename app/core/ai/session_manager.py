@@ -1,5 +1,8 @@
+import logging
+from typing import Dict, Optional
 from app.core.ai.market_psychology import PsychologyPatternAnalyzer
 from app.core.ai.technical_analyzer import TechnicalPatternAnalyzer
+from app.core.ai.trading_session import TradingSession
 from app.core.ai.zone_analyzer import ZonePatternAnalyzer
 
 
@@ -23,6 +26,9 @@ class SessionManager:
             'technical': TechnicalPatternAnalyzer(),
             'zone': ZonePatternAnalyzer()
         }
+        
+        # Initialize logging
+        self.logger = logging.getLogger(__name__)
     
     def create_new_session(self, 
                           market_data: pd.DataFrame, 
@@ -425,4 +431,144 @@ class SessionManager:
             'advice': advice
         }
 
+    def save_session_stats(self, session_stats) -> None:
+        """Save session statistics and maintain session limit"""
+        try:
+            # Convert datetime objects to string for JSON serialization
+            stats_dict = {
+                'session_id': session_stats.session_id,
+                'start_time': session_stats.start_time.isoformat(),
+                'end_time': session_stats.end_time.isoformat(),
+                'total_trades': session_stats.total_trades,
+                'winning_trades': session_stats.winning_trades,
+                'losing_trades': session_stats.losing_trades,
+                'win_rate': float(session_stats.win_rate),
+                'avg_profit': float(session_stats.avg_profit),
+                'max_drawdown': float(session_stats.max_drawdown),
+                'sharpe_ratio': float(session_stats.sharpe_ratio),
+                'psychological_state': session_stats.psychological_state,
+                'technical_state': session_stats.technical_state
+            }
+            
+            # Add session to list
+            self.sessions.append(stats_dict)
+            
+            # Update session metrics
+            self.session_metrics.append({
+                'session_id': session_stats.session_id,
+                'performance': {
+                    'win_rate': stats_dict['win_rate'],
+                    'avg_profit': stats_dict['avg_profit'],
+                    'sharpe_ratio': stats_dict['sharpe_ratio'],
+                    'max_drawdown': stats_dict['max_drawdown']
+                }
+            })
+            
+            # Maintain maximum sessions limit
+            if len(self.sessions) > self.max_sessions:
+                # Remove worst performing session based on Sharpe ratio
+                sorted_sessions = sorted(
+                    self.sessions,
+                    key=lambda x: x['sharpe_ratio'] - x['max_drawdown'],
+                    reverse=True
+                )
+                self.sessions = sorted_sessions[:self.max_sessions]
+                
+                # Update metrics
+                self._update_performance_metrics()
+            
+            self.logger.info(f"Successfully saved stats for session {session_stats.session_id}")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving session stats: {str(e)}")
+            raise
+            
+    def _update_performance_metrics(self) -> None:
+        """Update aggregate performance metrics"""
+        try:
+            if not self.sessions:
+                return
+                
+            metrics = {
+                'avg_win_rate': np.mean([s['win_rate'] for s in self.sessions]),
+                'avg_profit': np.mean([s['avg_profit'] for s in self.sessions]),
+                'avg_sharpe': np.mean([s['sharpe_ratio'] for s in self.sessions]),
+                'best_session': max(self.sessions, key=lambda x: x['sharpe_ratio'])['session_id'],
+                'worst_session': min(self.sessions, key=lambda x: x['sharpe_ratio'])['session_id'],
+                'total_trades': sum(s['total_trades'] for s in self.sessions),
+                'winning_trades': sum(s['winning_trades'] for s in self.sessions),
+                'losing_trades': sum(s['losing_trades'] for s in self.sessions)
+            }
+            
+            self.performance_metrics = metrics
+            
+        except Exception as e:
+            self.logger.error(f"Error updating performance metrics: {str(e)}")
+            
+    def rank_sessions(self) -> None:
+        """Rank sessions based on performance metrics"""
+        try:
+            self.sessions.sort(
+                key=lambda x: x['sharpe_ratio'] - x['max_drawdown'],
+                reverse=True
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error ranking sessions: {str(e)}")
+            
+    def maintain_min_sessions(self, min_sessions: int) -> None:
+        """Ensure minimum number of sessions is maintained"""
+        try:
+            while len(self.sessions) > min_sessions:
+                # Remove worst performing session
+                worst_session = min(
+                    self.sessions,
+                    key=lambda x: x['sharpe_ratio'] - x['max_drawdown']
+                )
+                self.sessions.remove(worst_session)
+                
+            self._update_performance_metrics()
+            
+        except Exception as e:
+            self.logger.error(f"Error maintaining minimum sessions: {str(e)}")
+            
+    def get_best_session(self) -> Optional[Dict]:
+        """Get the best performing session"""
+        try:
+            if not self.sessions:
+                return None
+                
+            return max(
+                self.sessions,
+                key=lambda x: x['sharpe_ratio'] - x['max_drawdown']
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error getting best session: {str(e)}")
+            return None
+            
+    def get_session_stats(self, session_id: str) -> Optional[Dict]:
+        """Get statistics for a specific session"""
+        try:
+            for session in self.sessions:
+                if session['session_id'] == session_id:
+                    return session
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error getting session stats: {str(e)}")
+            return None
+            
+    def get_performance_summary(self) -> Dict:
+        """Get summary of overall performance metrics"""
+        try:
+            return {
+                'total_sessions': len(self.sessions),
+                'performance_metrics': self.performance_metrics,
+                'recent_sessions': self.sessions[-5:] if self.sessions else []
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error getting performance summary: {str(e)}")
+            return {}
 

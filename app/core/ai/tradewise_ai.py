@@ -1,19 +1,23 @@
 import os
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
-import json
-import pandas as pd
 import numpy as np
+import pandas as pd
 from dataclasses import dataclass
 
 from app.core.ai.technical_analyzer import TechnicalPatternAnalyzer
 from app.core.ai.market_environment import MarketEnvironment
+from app.core.ai.trading_session import TradingSession
 from app.core.ai.zone_analyzer import ZonePatternAnalyzer
 from app.core.ai.market_psychology import PsychologyPatternAnalyzer
 from app.core.ai.trading_psychology import TradingPsychology
-from app.core.ai.model_builder import build_lstm_model
+from app.core.ai.model_builder import ModelBuilder
 from app.core.ai.session_manager import SessionManager
+from app.core.ai.reinforcement.market_state import MarketState
+from app.core.ai.reinforcement.action_space import ActionSpace
+from app.core.ai.reinforcement.reward_calculator import RewardCalculator
+from app.core.domain.models.trade_suggestion import DetailedTradeSuggestion
 
 @dataclass
 class SessionStats:
@@ -30,1072 +34,819 @@ class SessionStats:
     sharpe_ratio: float
     psychological_state: Dict
     technical_state: Dict
-
-@dataclass
-class PredictionStats:
-    """Statistics for prediction accuracy"""
-    session_id: str
-    timestamp: datetime
-    mae: float
-    mse: float
-    accuracy: float
-    precision: float
-    recall: float
-    predictions: List[Dict]
-    actual_values: List[float]
+    model: Optional[object] = None
+    reinforcement_stats: Optional[Dict] = None
+    prediction_accuracy: Optional[float] = None
 
 class TradewiseAI:
     def __init__(self, 
                  model_path: str = "./models/",
                  session_save_dir: str = "sessions/",
                  log_dir: str = "logs/",
-                 min_sessions: int = 50):
-        """Initialize TradewiseAI"""
+                 min_sessions: int = 50,
+                 max_sessions: int = 100):
+        """Initialize TradewiseAI with session management"""
         self.model_path = model_path
         self.session_save_dir = session_save_dir
         self.log_dir = log_dir
+        self.min_sessions = min_sessions
+        self.max_sessions = max_sessions
         
         # Initialize components
+        self.technical_analyzer = TechnicalPatternAnalyzer()
+        self.market_environment = MarketEnvironment()
+        self.zone_analyzer = ZonePatternAnalyzer()
         self.psychology_analyzer = PsychologyPatternAnalyzer()
         self.trading_psychology = TradingPsychology()
-        self.session_manager = SessionManager()
-        self.technical_analyzer = TechnicalPatternAnalyzer()
-        self.zone_analyzer = ZonePatternAnalyzer()
+        self.session_manager = SessionManager(max_sessions=max_sessions)
+        self.model_builder = ModelBuilder()
         
-        # Setup logging
+        # Initialize market environment components
+        self.market_state = MarketState()
+        self.action_space = ActionSpace()
+        self.reward_calculator = RewardCalculator()
+        
+        # RL parameters
+        self.gamma = 0.95  # Discount factor
+        self.epsilon = 0.1  # Exploration rate
+        self.learning_rate = 0.001
+        
+        # Setup logging and directories
         self._setup_logging()
+        self._create_directories()
         
-        self.session_manager = SessionManager()
-        # Create necessary directories
-        os.makedirs(model_path, exist_ok=True)
-        os.makedirs(session_save_dir, exist_ok=True)
-        os.makedirs(log_dir, exist_ok=True)
-        
-        self.min_sessions = min_sessions
-        self.look_back = 60  # Number of time steps to look back
-        self.model = None
-        self.model_config = {}
-        self.model_weights = None
+        # Load existing sessions if available
+        self._load_existing_sessions()
 
-    def _setup_logging(self):
-        """Setup logging configuration"""
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO)
-        
-        # File handler
-        log_filename = os.path.join(self.log_dir, f'tradewise_{datetime.now().strftime("%Y%m%d")}.log')
-        fh = logging.FileHandler(log_filename)
-        fh.setLevel(logging.INFO)
-        
-        # Console handler
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.INFO)
-        
-        # Formatter
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        fh.setFormatter(formatter)
-        ch.setFormatter(formatter)
-        
-        self.logger.addHandler(fh)
-        self.logger.addHandler(ch)
-
-    async def generate_trade_suggestions(self, data_feed: pd.DataFrame) -> List[Dict]:
-        """Generate trade suggestions based on market analysis and psychological factors"""
+    async def train(self, data_feed: pd.DataFrame) -> SessionStats:
+        """Train model with market environment-based reinforcement learning"""
         try:
-            self.logger.info("Generating trade suggestions")
+            self.logger.info("Starting new training session with market environment")
             
-            # Calculate technical indicators
-            df_indicators = self._prepare_technical_indicators(data_feed)
+            # Initialize market environment
+            market_env = self._initialize_market_environment(data_feed)
             
-            # Get current market state
-            current_data = df_indicators  # Use all available data for analysis
-            
-            # Get market analysis
-            market_analysis = self._analyze_market(current_data)
-            
-            # Analyze psychological factors
-            psych_analysis = self.psychology_analyzer.analyze(
-                market_analysis['state_history'],
-                market_analysis['trades']
-            )
-            
-            # Analyze zones
-            zone_analysis = self.zone_analyzer.analyze(
-                market_analysis['state_history'],
-                market_analysis['trades']
-            )
-            
-            # Get session recommendations
-            session_recommendations = self.session_manager.get_session_recommendations(
-                market_analysis['current_state'],
-                psych_analysis['patterns']
-            )
-            
-            # Generate trading signals
-            signals = self._generate_trading_signals(
-                current_data,
-                market_analysis,
-                psych_analysis,
-                zone_analysis
-            )
-            
-            # Format suggestions with comprehensive analysis
-            suggestions = []
-            for signal in signals:
-                suggestion = {
-                    'action': signal['action'],
-                    'entry': {
-                        'price': float(signal['entry_price']),
-                        'confidence': float(signal['confidence']),
-                        'timeframe': signal['timeframe']
-                    },
-                    'risk_management': {
-                        'stop_loss': float(signal['stop_loss']),
-                        'take_profit': float(signal['take_profit']),
-                        'position_size': float(signal['position_size']),
-                        'risk_reward_ratio': float(signal['risk_reward_ratio'])
-                    },
-                    'analysis': {
-                        'technical': market_analysis['current_state']['technical_state'],
-                        'psychological': psych_analysis['patterns'],
-                        'zones': zone_analysis['patterns']
-                    },
-                    'recommendations': session_recommendations,
-                    'rationale': self._generate_trade_rationale(
-                        signal,
-                        market_analysis,
-                        psych_analysis,
-                        zone_analysis
-                    )
+            # Create new session
+            session_id = str(datetime.now().timestamp())
+            session_stats = SessionStats(
+                session_id=session_id,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                total_trades=0,
+                winning_trades=0,
+                losing_trades=0,
+                win_rate=0.0,
+                avg_profit=0.0,
+                max_drawdown=0.0,
+                sharpe_ratio=0.0,
+                psychological_state=self._get_initial_psychological_state(),
+                technical_state=self._get_initial_technical_state(),
+                model=None,
+                reinforcement_stats={
+                    'total_rewards': 0,
+                    'avg_reward': 0,
+                    'max_reward': float('-inf'),
+                    'min_reward': float('inf'),
+                    'episode_rewards': []
                 }
+            )
+
+            # Train with reinforcement learning
+            trained_session = await self._train_with_market_environment(
+                session_stats,
+                market_env,
+                data_feed
+            )
+            
+            # Update session manager
+            self.session_manager.save_session_stats(trained_session)
+            
+            return trained_session
+            
+        except Exception as e:
+            self.logger.error(f"Error during market environment training: {str(e)}")
+            raise
+
+    async def _train_with_market_environment(self,
+                                          session: SessionStats,
+                                          market_env: MarketEnvironment,
+                                          data_feed: pd.DataFrame) -> SessionStats:
+        """Train model using market environment reinforcement learning"""
+        try:
+            # Initialize model
+            model = self._build_model(market_env.state_size, market_env.action_size)
+            session.model = model
+            
+            # Training parameters
+            episodes = 100
+            max_steps = len(data_feed) - 1
+            
+            for episode in range(episodes):
+                self.logger.info(f"Starting episode {episode + 1}/{episodes}")
+                
+                # Reset environment
+                state = market_env.reset()
+                total_reward = 0
+                
+                for step in range(max_steps):
+                    # Get action using epsilon-greedy policy
+                    if np.random.random() < self.epsilon:
+                        action = np.random.randint(market_env.action_size)
+                    else:
+                        action = np.argmax(model.predict(state.reshape(1, -1))[0])
+                    
+                    # Take action in environment
+                    next_state, reward, done, info = market_env.step(action)
+                    
+                    # Store experience and train model
+                    self._train_on_experience(
+                        model,
+                        state,
+                        action,
+                        reward,
+                        next_state,
+                        done
+                    )
+                    
+                    # Update state and accumulate reward
+                    state = next_state
+                    total_reward += reward
+                    
+                    # Update session stats
+                    self._update_session_stats(session, reward, info)
+                    
+                    if done:
+                        break
+                
+                # Update reinforcement stats
+                session.reinforcement_stats['episode_rewards'].append(total_reward)
+                session.reinforcement_stats['total_rewards'] += total_reward
+                session.reinforcement_stats['avg_reward'] = (
+                    session.reinforcement_stats['total_rewards'] / (episode + 1)
+                )
+                session.reinforcement_stats['max_reward'] = max(
+                    session.reinforcement_stats['max_reward'],
+                    total_reward
+                )
+                session.reinforcement_stats['min_reward'] = min(
+                    session.reinforcement_stats['min_reward'],
+                    total_reward
+                )
+                
+                # Decay epsilon
+                self.epsilon = max(0.01, self.epsilon * 0.995)
+            
+            return session
+            
+        except Exception as e:
+            self.logger.error(f"Error during market environment training: {str(e)}")
+            raise
+
+    def _initialize_market_environment(self, data_feed: pd.DataFrame) -> MarketEnvironment:
+        """Initialize market environment with data feed"""
+        try:
+            # Calculate technical indicators
+            technical_data = self.technical_analyzer.calculate_indicators(data_feed)
+            
+            # Initialize environment components
+            market_state = MarketState()
+            action_space = ActionSpace()
+            reward_calculator = RewardCalculator()
+            
+            # Create environment
+            market_env = MarketEnvironment(
+                data=technical_data,
+                action_space=action_space,
+                market_state=market_state,
+                reward_calculator=reward_calculator
+            )
+            
+            return market_env
+            
+        except Exception as e:
+            self.logger.error(f"Error initializing market environment: {str(e)}")
+            raise
+
+    def _train_on_experience(self,
+                           model,
+                           state: np.ndarray,
+                           action: int,
+                           reward: float,
+                           next_state: np.ndarray,
+                           done: bool):
+        """Train model on single experience tuple"""
+        try:
+            # Get current Q-values
+            current_q = model.predict(state.reshape(1, -1))[0]
+            
+            # Get next Q-values
+            next_q = model.predict(next_state.reshape(1, -1))[0]
+            
+            # Update Q-value for taken action
+            if done:
+                current_q[action] = reward
+            else:
+                current_q[action] = reward + self.gamma * np.max(next_q)
+            
+            # Train model
+            model.fit(
+                state.reshape(1, -1),
+                current_q.reshape(1, -1),
+                verbose=0
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error training on experience: {str(e)}")
+            raise
+
+    def _update_session_stats(self,
+                            session: SessionStats,
+                            reward: float,
+                            info: Dict):
+        """Update session statistics based on step results"""
+        try:
+            # Update trade counts
+            if info.get('trade_executed', False):
+                session.total_trades += 1
+                if info.get('trade_profit', 0) > 0:
+                    session.winning_trades += 1
+                else:
+                    session.losing_trades += 1
+            
+            # Update win rate
+            if session.total_trades > 0:
+                session.win_rate = session.winning_trades / session.total_trades
+            
+            # Update profit metrics
+            current_profit = info.get('trade_profit', 0)
+            session.avg_profit = (
+                (session.avg_profit * (session.total_trades - 1) + current_profit)
+                / session.total_trades if session.total_trades > 0 else 0
+            )
+            
+            # Update drawdown
+            if info.get('drawdown', 0) > session.max_drawdown:
+                session.max_drawdown = info['drawdown']
+            
+            # Update Sharpe ratio
+            if len(session.reinforcement_stats['episode_rewards']) > 1:
+                returns = np.array(session.reinforcement_stats['episode_rewards'])
+                session.sharpe_ratio = (
+                    np.mean(returns) / np.std(returns) if np.std(returns) > 0 else 0
+                )
+            
+        except Exception as e:
+            self.logger.error(f"Error updating session stats: {str(e)}")
+            raise
+
+    async def predict(self, data_feed: pd.DataFrame) -> List[Dict]:
+        """Generate predictions using best performing session"""
+        try:
+            self.logger.info("Starting prediction process")
+            
+            # Get top performing sessions
+            top_sessions = self.session_manager.get_top_sessions(n=3)
+            if not top_sessions:
+                raise ValueError("No trained sessions available")
+            
+            # Generate ensemble predictions
+            predictions = []
+            for session in top_sessions:
+                pred = self._generate_session_predictions(session, data_feed)
+                predictions.append(pred)
+            
+            # Combine predictions with weights based on session performance
+            final_predictions = self._combine_predictions(predictions, top_sessions)
+            
+        except Exception as e:
+            self.logger.error(f"Error preparing prediction features: {str(e)}")
+            return pd.DataFrame()
+
+    def _update_features(self, last_features: np.ndarray, prediction: float) -> np.ndarray:
+        """Update feature vector with new prediction"""
+        try:
+            new_features = last_features.copy()
+            
+            # Update close price
+            new_features[0] = prediction
+            
+            # Update returns
+            new_features[1] = (prediction - last_features[0]) / last_features[0]
+            
+            # Update volatility (simple approximation)
+            new_features[2] = abs(new_features[1])
+            
+            # Keep other features unchanged for now
+            # In a more sophisticated implementation, you would update RSI, MACD, etc.
+            
+            return new_features
+            
+        except Exception as e:
+            self.logger.error(f"Error updating features: {str(e)}")
+            return last_features
+
+    def _calculate_trend_strength(self, df: pd.DataFrame) -> float:
+        """Calculate the strength of the price trend"""
+        try:
+            short_ma = df['close'].rolling(window=20).mean()
+            long_ma = df['close'].rolling(window=50).mean()
+            
+            trend_strength = (short_ma - long_ma) / long_ma
+            return float(trend_strength.iloc[-1].clip(-1, 1))
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating trend strength: {str(e)}")
+            return 0.0
+
+    def _calculate_trend_consistency(self, df: pd.DataFrame) -> float:
+        """Calculate the consistency of the price trend"""
+        try:
+            short_ma = df['close'].rolling(window=20).mean()
+            long_ma = df['close'].rolling(window=50).mean()            
+            trend_consistency = (short_ma - long_ma) / long_ma
+            
+            return float(trend_consistency.iloc[-1].clip(-1, 1))
+        except Exception as e:
+            self.logger.error(f"Error calculating trend consistency: {str(e)}")
+            return 0.0
+
+    def _calculate_prediction_confidence(self,
+                                      prediction: float,
+                                      data_feed: pd.DataFrame,
+                                      technical_state: Dict) -> float:
+        """Calculate confidence score for a prediction"""
+        try:
+            # Technical analysis confidence
+            technical_confidence = self._get_technical_confidence(
+                prediction, data_feed, technical_state
+            )
+            
+            # Psychological confidence
+            psychological_confidence = self._get_psychological_confidence(
+                prediction, data_feed
+            )
+            
+            # Market state confidence
+            market_confidence = self._get_market_confidence(
+                prediction, data_feed
+            )
+            
+            # Weighted average of confidence scores
+            confidence = (
+                technical_confidence * 0.4 +
+                psychological_confidence * 0.3 +
+                market_confidence * 0.3
+            )
+            
+            return float(np.clip(confidence, 0, 1))
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating prediction confidence: {str(e)}")
+            return 0.5
+
+    def _get_psychological_state(self, training_result: TrainingResult) -> Dict:
+        """Get psychological state from training result"""
+        try:
+            return {
+                'confidence': training_result.metrics.get('confidence', 0.5),
+                'emotional_balance': training_result.metrics.get('emotional_balance', 0.5),
+                'risk_tolerance': training_result.metrics.get('risk_tolerance', 0.5),
+                'stress_level': training_result.metrics.get('stress_level', 0.3)
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting psychological state: {str(e)}")
+            return {}
+
+    def _get_technical_state(self, training_result: TrainingResult) -> Dict:
+        """Get technical state from training result"""
+        try:
+            return {
+                'trend': {
+                    'direction': training_result.metrics.get('trend_direction', 'neutral'),
+                    'strength': training_result.metrics.get('trend_strength', 0.5)
+                },
+                'momentum': training_result.metrics.get('momentum', 0.0),
+                'volatility': training_result.metrics.get('volatility', 0.0),
+                'support_resistance': {
+                    'support': training_result.metrics.get('support_level', 0.0),
+                    'resistance': training_result.metrics.get('resistance_level', 0.0)
+                }
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting technical state: {str(e)}")
+            return {}
+
+    def _get_technical_indicators(self, data_feed: pd.DataFrame, i: int) -> Dict:
+        """Get technical indicators for a prediction"""
+        try:
+            window = data_feed.iloc[max(0, i-20):i+1]
+            return {
+                'rsi': self.technical_analyzer.calculate_rsi(window),
+                'macd': self.technical_analyzer.calculate_macd(window),
+                'bollinger': self.technical_analyzer.calculate_bollinger_bands(window),
+                'volume_profile': self.technical_analyzer.analyze_volume_profile(window),
+                'support_resistance': self.zone_analyzer.identify_zone(window['close'].values)
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting technical indicators: {str(e)}")
+            return {}
+
+    def _get_psychological_factors(self, data_feed: pd.DataFrame, i: int) -> Dict:
+        """Get psychological factors for a prediction"""
+        try:
+            window = data_feed.iloc[max(0, i-20):i+1]
+            psych_analysis = self.psychology_analyzer.analyze_market_psychology(window)
+            return {
+                'market_sentiment': psych_analysis.get('sentiment', 'neutral'),
+                'fear_greed_index': psych_analysis.get('fear_greed', 50),
+                'momentum_psychology': psych_analysis.get('momentum_psychology', 0.5),
+                'volatility_sentiment': psych_analysis.get('volatility_sentiment', 0.5)
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting psychological factors: {str(e)}")
+            return {}
+
+    def _get_market_confidence(self, prediction: float, data_feed: pd.DataFrame) -> float:
+        """Get market confidence for a prediction"""
+        try:
+            # Calculate recent price volatility
+            returns = data_feed['close'].pct_change().dropna()
+            volatility = returns.std()
+            
+            # Get market trend strength
+            trend_strength = self.technical_analyzer.get_trend_strength(data_feed)
+            
+            # Get volume consistency
+            volume_consistency = self.technical_analyzer.analyze_volume_consistency(data_feed)
+            
+            # Calculate confidence score
+            confidence = (
+                (1 - volatility) * 0.4 +  # Lower volatility = higher confidence
+                trend_strength * 0.4 +     # Stronger trend = higher confidence
+                volume_consistency * 0.2    # Consistent volume = higher confidence
+            )
+            
+            return float(np.clip(confidence, 0, 1))
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating market confidence: {str(e)}")
+            return 0.5
+
+    async def generate_trade_suggestions(self, data_feed: pd.DataFrame) -> List[TradingSession]:
+        """Generate trade suggestions from top performing sessions based on forecast confidence"""
+        try:
+            self.logger.info("Generating trade suggestions from sessions")
+            
+            if not self.session_manager.sessions:
+                await self.train(data_feed)
+            
+            # Get all sessions and their predictions
+            session_forecasts = []
+            
+            for session in self.session_manager.sessions:
+                # Load model for this session
+                model_path = os.path.join(self.model_path, session['session_id'], 'model.h5')
+                model = self.model_builder.load_model(model_path)
+                
+                if model is None:
+                    continue
+                
+                # Generate predictions
+                predictions = await self.predict(data_feed)
+                
+                # Get analysis states
+                technical_state = self._calculate_technical_state(data_feed)
+                psych_state = self.trading_psychology.analyze_trader_psychology(
+                    data_feed,
+                    self.zone_analyzer.identify_zone(data_feed['close'].values)
+                )
+                
+                # Determine action and confidence
+                action, confidence = self._determine_trade_action(
+                    predictions,
+                    technical_state,
+                    psych_state
+                )
+                
+                # Calculate forecast metrics
+                forecast_metrics = self._calculate_forecast_metrics(
+                    predictions,
+                    data_feed['close'].iloc[-1],
+                    technical_state
+                )
+                
+                session_forecasts.append({
+                    'session': session,
+                    'predictions': predictions,
+                    'action': action,
+                    'confidence': confidence,
+                    'technical_state': technical_state,
+                    'psych_state': psych_state,
+                    'forecast_metrics': forecast_metrics
+                })
+            
+            # Filter and sort sessions based on confidence and performance
+            filtered_forecasts = [
+                f for f in session_forecasts 
+                if f['confidence'] > 0.6  # Minimum confidence threshold
+                and f['session']['win_rate'] > 0.5  # Minimum win rate
+                and f['session']['sharpe_ratio'] > 1.0  # Minimum Sharpe ratio
+            ]
+            
+            # Sort by combined score (confidence + performance metrics)
+            sorted_forecasts = sorted(
+                filtered_forecasts,
+                key=lambda x: (
+                    x['confidence'] * 0.4 +  # 40% weight to confidence
+                    x['session']['win_rate'] * 0.3 +  # 30% weight to win rate
+                    (x['session']['sharpe_ratio'] / 3) * 0.3  # 30% weight to normalized Sharpe
+                ),
+                reverse=True
+            )
+            
+            # Take top 20 forecasts
+            top_forecasts = sorted_forecasts[:20]
+            
+            suggestions = []
+            
+            for forecast in top_forecasts:
+                # Calculate risk parameters
+                risk_params = self._calculate_risk_parameters(
+                    forecast['predictions'],
+                    data_feed['close'].iloc[-1],
+                    forecast['technical_state']
+                )
+                
+                # Create trade suggestion
+                suggestion = DetailedTradeSuggestion(
+                    Suggestion=f"Session {forecast['session']['session_id'][:8]} suggests {forecast['action']}",
+                    Action=forecast['action'],
+                    Summary={
+                        "confidence": f"{forecast['confidence']:.2%}",
+                        "session_performance": (
+                            f"Win Rate: {forecast['session']['win_rate']:.2%}, "
+                            f"Sharpe: {forecast['session']['sharpe_ratio']:.2f}"
+                        ),
+                        "predicted_movement": f"{forecast['forecast_metrics']['predicted_movement']:.2%}",
+                        "forecast_strength": f"{forecast['forecast_metrics']['strength']:.2f}"
+                    },
+                    Risk_Management={
+                        "stop_loss": f"{risk_params['stop_loss']:.2f}",
+                        "take_profit": f"{risk_params['take_profit']:.2f}",
+                        "position_size": f"{risk_params['position_size']:.2f}",
+                        "risk_reward": f"{risk_params['risk_reward']:.2f}"
+                    },
+                    Technical_Analysis={
+                        "trend": forecast['technical_state']['trend']['direction'],
+                        "strength": f"{forecast['technical_state']['trend']['strength']:.2f}",
+                        "momentum": (
+                            f"RSI: {forecast['technical_state']['momentum']['rsi']:.2f}, "
+                            f"MACD: {forecast['technical_state']['momentum']['macd']:.2f}"
+                        )
+                    },
+                    Forecast_Time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
+                
                 suggestions.append(suggestion)
             
-            # Log session stats
-            self._log_session_stats({
-                'suggestions': suggestions,
-                'market_state': market_analysis['current_state'],
-                'psychological_state': psych_analysis['patterns'],
-                'timestamp': datetime.now()
-            })
-            
+            self.logger.info(f"Generated {len(suggestions)} filtered trade suggestions")
             return suggestions
             
         except Exception as e:
             self.logger.error(f"Error generating trade suggestions: {str(e)}")
             raise
 
-    async def get_session_stats(self, session_id: Optional[str] = None) -> List[SessionStats]:
-        """Get statistics for trading sessions"""
+    def _calculate_forecast_metrics(self, predictions: List[float], 
+                                  current_price: float,
+                                  technical_state: Dict) -> Dict:
+        """Calculate forecast metrics and strength"""
         try:
-            if session_id:
-                stats_file = os.path.join(self.session_save_dir, session_id, 'stats.json')
-                if os.path.exists(stats_file):
-                    with open(stats_file, 'r') as f:
-                        return SessionStats(**json.load(f))
-                return None
+            # Calculate predicted movement
+            predicted_movement = (predictions[-1] - current_price) / current_price
             
-            # Get all session stats
-            stats = []
-            for session_dir in os.listdir(self.session_save_dir):
-                stats_file = os.path.join(self.session_save_dir, session_dir, 'stats.json')
-                if os.path.exists(stats_file):
-                    with open(stats_file, 'r') as f:
-                        stats.append(SessionStats(**json.load(f)))
-            return stats
+            # Calculate forecast volatility
+            forecast_volatility = np.std(predictions) / np.mean(predictions)
             
-        except Exception as e:
-            self.logger.error(f"Error getting session stats: {str(e)}")
-            return []
-
-    async def get_prediction_stats(self, session_id: Optional[str] = None) -> List[PredictionStats]:
-        """Get statistics for predictions"""
-        try:
-            if session_id:
-                pred_file = os.path.join(self.session_save_dir, session_id, 'predictions.json')
-                if os.path.exists(pred_file):
-                    with open(pred_file, 'r') as f:
-                        return PredictionStats(**json.load(f))
-                return None
+            # Calculate trend strength in predictions
+            forecast_trend = np.polyfit(range(len(predictions)), predictions, 1)[0]
+            trend_strength = abs(forecast_trend / current_price)
             
-            # Get all prediction stats
-            stats = []
-            for session_dir in os.listdir(self.session_save_dir):
-                pred_file = os.path.join(self.session_save_dir, session_dir, 'predictions.json')
-                if os.path.exists(pred_file):
-                    with open(pred_file, 'r') as f:
-                        stats.append(PredictionStats(**json.load(f)))
-            return stats
+            # Calculate forecast consistency
+            diffs = np.diff(predictions)
+            consistency = np.mean(np.sign(diffs[1:]) == np.sign(diffs[:-1]))
             
-        except Exception as e:
-            self.logger.error(f"Error getting prediction stats: {str(e)}")
-            return []
-
-    async def get_session_logs(self, session_id: Optional[str] = None, 
-                             start_date: Optional[str] = None,
-                             end_date: Optional[str] = None) -> List[Dict]:
-        """Get logs for trading sessions"""
-        try:
-            logs = []
-            log_files = []
-            
-            if session_id:
-                # Get logs for specific session
-                log_file = os.path.join(self.log_dir, f'tradewise_{session_id}.log')
-                if os.path.exists(log_file):
-                    log_files.append(log_file)
-            else:
-                # Get all log files within date range
-                start_dt = datetime.strptime(start_date, '%Y-%m-%d') if start_date else None
-                end_dt = datetime.strptime(end_date, '%Y-%m-%d') if end_date else None
-                
-                for file in os.listdir(self.log_dir):
-                    if file.startswith('tradewise_') and file.endswith('.log'):
-                        file_date = datetime.strptime(file.split('_')[1].split('.')[0], '%Y%m%d')
-                        if (not start_dt or file_date >= start_dt) and (not end_dt or file_date <= end_dt):
-                            log_files.append(os.path.join(self.log_dir, file))
-            
-            # Parse log files
-            for log_file in log_files:
-                with open(log_file, 'r') as f:
-                    for line in f:
-                        try:
-                            timestamp, name, level, message = line.strip().split(' - ')
-                            logs.append({
-                                'timestamp': timestamp,
-                                'name': name,
-                                'level': level,
-                                'message': message
-                            })
-                        except:
-                            continue
-            
-            return sorted(logs, key=lambda x: x['timestamp'], reverse=True)
-            
-        except Exception as e:
-            self.logger.error(f"Error getting session logs: {str(e)}")
-            return []
-
-    def _analyze_market(self, df: pd.DataFrame) -> Dict:
-        """Analyze market conditions and generate state history"""
-        try:
-            # Get last 120 periods for analysis
-            current_data = df[-120:]
-            
-            # Initialize state history
-            state_history = []
-            trades = []  # Will be populated if trade data is available
-            
-            # Calculate market states for each period
-            for i in range(len(current_data)):
-                window = current_data[:i+1]
-                
-                technical_state = self._calculate_technical_state(window)
-                psychological_state = self._calculate_psychological_state(window)
-                zone_state = self._calculate_zone_state(window)
-                
-                state = {
-                    'timestamp': window.index[-1],
-                    'technical_state': technical_state,
-                    'psychological_state': psychological_state,
-                    'zone_state': zone_state
-                }
-                state_history.append(state)
+            # Calculate overall forecast strength
+            strength = (
+                (1 - forecast_volatility) * 0.3 +  # Lower volatility is better
+                trend_strength * 0.4 +            # Stronger trend is better
+                consistency * 0.3                 # Higher consistency is better
+            )
             
             return {
-                'state_history': state_history,
-                'trades': trades,
-                'current_state': state_history[-1]
+                'predicted_movement': predicted_movement,
+                'volatility': forecast_volatility,
+                'trend_strength': trend_strength,
+                'consistency': consistency,
+                'strength': strength
             }
             
         except Exception as e:
-            self.logger.error(f"Error in market analysis: {str(e)}")
-            raise
+            self.logger.error(f"Error calculating forecast metrics: {str(e)}")
+            return {
+                'predicted_movement': 0.0,
+                'volatility': 0.0,
+                'trend_strength': 0.0,
+                'consistency': 0.0,
+                'strength': 0.0
+            }
+
+    def _determine_trade_action(self, predictions: List[float], 
+                              technical_state: Dict, 
+                              psych_state: Dict) -> Tuple[str, float]:
+        """Determine trade action and confidence level"""
+        try:
+            current_price = predictions[0]
+            future_prices = predictions[1:]
+            
+            # Calculate price movement
+            price_movement = (future_prices[-1] - current_price) / current_price
+            
+            # Calculate confidence based on multiple factors
+            technical_confidence = technical_state['trend']['strength']
+            psych_confidence = psych_state.get('confidence', 0.5)
+            
+            # Combined confidence
+            confidence = (technical_confidence + psych_confidence) / 2
+            
+            # Determine action
+            if price_movement > 0.01 and confidence > 0.6:
+                action = "BUY"
+            elif price_movement < -0.01 and confidence > 0.6:
+                action = "SELL"
+            else:
+                action = "HOLD"
+                
+            return action, confidence
+            
+        except Exception as e:
+            self.logger.error(f"Error determining trade action: {str(e)}")
+            return "HOLD", 0.0
+
+    def _calculate_risk_parameters(self, predictions: List[float], 
+                                 current_price: float,
+                                 technical_state: Dict) -> Dict:
+        """Calculate risk management parameters"""
+        try:
+            # Calculate volatility
+            volatility = technical_state['volatility']
+            
+            # Calculate stop loss and take profit distances based on volatility
+            stop_distance = max(volatility * 2, 0.01)  # Minimum 1% stop loss
+            profit_distance = max(volatility * 3, 0.02)  # Minimum 2% take profit
+            
+            # Calculate position size based on risk
+            risk_per_trade = 0.02  # 2% risk per trade
+            position_size = risk_per_trade / stop_distance
+            
+            # Calculate risk/reward ratio
+            risk_reward = profit_distance / stop_distance
+            
+            return {
+                'stop_loss': current_price * (1 - stop_distance),
+                'take_profit': current_price * (1 + profit_distance),
+                'position_size': position_size,
+                'risk_reward': risk_reward
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating risk parameters: {str(e)}")
+            return {
+                'stop_loss': 0.0,
+                'take_profit': 0.0,
+                'position_size': 0.0,
+                'risk_reward': 0.0
+            }
 
     def _calculate_technical_state(self, df: pd.DataFrame) -> Dict:
-        """Calculate technical indicators and state"""
+        """Calculate current technical state of the market"""
         try:
             latest = df.iloc[-1]
             
             return {
-                'close': float(latest['close']),
-                'high': float(latest['high']),
-                'low': float(latest['low']),
-                'volume': float(latest['volume']),
                 'trend': {
-                    'direction': 'up' if latest['close'] > df['close'].mean() else 'down', # todo this can be improved
-                    'strength': self._calculate_trend_strength(df),
-                    'consistency': self._calculate_trend_consistency(df)
+                    'direction': 'up' if latest['close'] > df['close'].mean() else 'down',
+                    'strength': float(self._calculate_trend_strength(df)),
+                    'consistency': float(self._calculate_trend_consistency(df))
                 },
                 'momentum': {
                     'rsi': float(latest.get('rsi', 50)),
                     'macd': float(latest.get('macd', 0)),
-                    'macd_signal': float(latest.get('macd_signal', 0)),
                     'macd_hist': float(latest.get('macd_hist', 0))
                 },
-                'volatility': float(latest.get('volatility', df['close'].std())),
-                'volume_trend': self._calculate_volume_trend(df)
+                'volatility': float(latest['close'].rolling(window=20).std())
             }
         except Exception as e:
             self.logger.error(f"Error calculating technical state: {str(e)}")
             return {}
 
-    def _calculate_psychological_state(self, df: pd.DataFrame) -> Dict:
-        """Calculate psychological state based on market behavior"""
-        try:
-            # Get current zones
-            zones = self.zone_analyzer.identify_zone(df)
-            
-            # Calculate psychological metrics
-            psychological_state = self.trading_psychology.analyze_trader_psychology(df, zones)
-            
-            # Add market psychology metrics
-            market_psychology = self.trading_psychology.analyze_market_psychology(df)
-            psychological_state.update(market_psychology)
-            
-            return psychological_state
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating psychological state: {str(e)}")
-            return {}
-
-    def _calculate_zone_state(self, df: pd.DataFrame) -> Dict:
-        """Calculate price zone state"""
-        try:
-            current_price = float(df['close'].iloc[-1])
-            
-            # Identify key zones
-            zones = self.price_analyzer.identify_zones(df)
-            
-            # Calculate zone metrics
-            zone_state = {
-                'support_zones': zones['support_zones'],
-                'resistance_zones': zones['resistance_zones'],
-                'current_zone': self._identify_current_zone(current_price, zones),
-                'zone_strength': self._calculate_zone_strength(current_price, zones),
-                'breakout_potential': self._calculate_breakout_potential(df, zones)
-            }
-            
-            return zone_state
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating zone state: {str(e)}")
-            return {}
-
-    def _generate_predictions(self, df: pd.DataFrame) -> Dict:
-        """Generate price predictions and confidence levels"""
-        try:
-            # Prepare features for prediction
-            features = self._prepare_prediction_features(df)
-            
-            # Generate predictions for different timeframes
-            predictions = {
-                'short_term': self._predict_timeframe(features, timeframe='short'),
-                'medium_term': self._predict_timeframe(features, timeframe='medium'),
-                'long_term': self._predict_timeframe(features, timeframe='long')
-            }
-            
-            # Calculate prediction metrics
-            metrics = self._calculate_prediction_metrics(predictions, df)
-            
-            return {
-                'predictions': predictions,
-                'metrics': metrics,
-                'confidence': self._calculate_prediction_confidence(metrics)
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error generating predictions: {str(e)}")
-            return {}
-
     def _prepare_prediction_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Prepare features for prediction models"""
+        """Prepare features for prediction"""
         try:
             features = pd.DataFrame()
             
-            # Technical features
-            features['trend_strength'] = self._calculate_trend_strength(df)
+            # Price-based features
+            features['close'] = df['close']
+            features['returns'] = df['close'].pct_change()
             features['volatility'] = df['close'].rolling(window=20).std()
-            features['volume_trend'] = self._calculate_volume_trend(df)
             
-            # Momentum features
+            # Technical indicators
             features['rsi'] = df.get('rsi', pd.Series([50] * len(df)))
-            features['macd_hist'] = df.get('macd_hist', pd.Series([0] * len(df)))
-            
-            # Zone features
-            zones = self.zone_analyzer.identify_zone(df)
-            features['zone_strength'] = self._calculate_zone_strength(df['close'], zones)
+            features['macd'] = df.get('macd', pd.Series([0] * len(df)))
+            features['trend_strength'] = self._calculate_trend_strength(df)
             
             return features.fillna(method='ffill')
             
         except Exception as e:
             self.logger.error(f"Error preparing prediction features: {str(e)}")
             return pd.DataFrame()
-            
-    def _calculate_zone_strength(self, df: pd.DataFrame) -> pd.Series:
-        """Calculate the strength of the price trend"""
-        try:
-            # Calculate short and long term moving averages
-            short_ma = df['close'].rolling(window=20).mean()
-            long_ma = df['close'].rolling(window=50).mean()
-            
-            # Calculate trend strength based on MA crossovers and slope
-            trend_strength = (short_ma - long_ma) / long_ma
-            
-            # Normalize between -1 and 1
-            return trend_strength.clip(-1, 1)
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating trend strength: {str(e)}")
-            return pd.Series([0] * len(df))
-            
-    def _calculate_volume_trend(self, df: pd.DataFrame) -> pd.Series:
-        """Calculate the trend in trading volume"""
-        try:
-            # Calculate volume moving average
-            vol_ma = df['volume'].rolling(window=20).mean()
-            
-            # Compare current volume to moving average
-            volume_trend = (df['volume'] - vol_ma) / vol_ma
-            
-            # Normalize between -1 and 1
-            return volume_trend.clip(-1, 1)
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating volume trend: {str(e)}")
-            return pd.Series([0] * len(df))
 
-    def _format_suggestions(self, predictions: Dict, 
-                          market_analysis: Dict,
-                          psych_analysis: Dict,
-                          zone_analysis: Dict) -> List[Dict]:
-        """Format trading suggestions with comprehensive analysis"""
+    def _update_features(self, last_features: np.ndarray, prediction: float) -> np.ndarray:
+        """Update feature vector with new prediction"""
         try:
-            current_price = float(market_analysis['current_state']['technical_state']['close'])
+            new_features = last_features.copy()
             
-            suggestions = []
+            # Update close price
+            new_features[0] = prediction
             
-            # Generate suggestions for different timeframes
-            for timeframe, prediction in predictions['predictions'].items():
-                if self._should_generate_suggestion(prediction, market_analysis):
-                    suggestion = {
-                        'timeframe': timeframe,
-                        'action': self._determine_action(prediction, current_price),
-                        'entry_price': self._calculate_entry_price(prediction, current_price),
-                        'stop_loss': self._calculate_stop_loss(prediction, zone_analysis),
-                        'take_profit': self._calculate_take_profit(prediction, zone_analysis),
-                        'confidence': float(prediction['confidence']),
-                        'analysis': {
-                            'technical': market_analysis['current_state']['technical_state'],
-                            'psychological': psych_analysis['patterns'],
-                            'zones': zone_analysis['patterns']
-                        },
-                        'rationale': self._generate_suggestion_rationale(
-                            prediction,
-                            market_analysis,
-                            psych_analysis,
-                            zone_analysis
-                        )
-                    }
-                    suggestions.append(suggestion)
+            # Update returns
+            new_features[1] = (prediction - last_features[0]) / last_features[0]
             
-            return suggestions
+            # Update volatility (simple approximation)
+            new_features[2] = abs(new_features[1])
+            
+            # Keep other features unchanged for now
+            # In a more sophisticated implementation, you would update RSI, MACD, etc.
+            
+            return new_features
             
         except Exception as e:
-            self.logger.error(f"Error formatting suggestions: {str(e)}")
-            return
-
-    def _should_generate_suggestion(self, prediction: Dict, market_analysis: Dict) -> bool:
-        """Determine if a suggestion should be generated based on confidence and conditions"""
-        try:
-            # Check prediction confidence
-            if prediction['confidence'] < 0.6:  # Minimum confidence threshold
-                return False
-                
-            # Check market conditions
-            technical_state = market_analysis['current_state']['technical_state']
-            
-            # Don't generate suggestions in extremely volatile conditions
-            if technical_state['volatility'] > 0.8:  # High volatility threshold
-                return False
-                
-            # Check trend strength
-            if technical_state['trend']['strength'] < 0.3:  # Weak trend threshold
-                return False
-                
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error in suggestion validation: {str(e)}")
-            return False
-
-    def _generate_suggestion_rationale(self, prediction: Dict,
-                                     market_analysis: Dict,
-                                     psych_analysis: Dict,
-                                     zone_analysis: Dict) -> Dict:
-        """Generate detailed rationale for trading suggestion"""
-        try:
-            technical_state = market_analysis['current_state']['technical_state']
-            
-            rationale = {
-                'technical_factors': {
-                    'trend': {
-                        'direction': technical_state['trend']['direction'],
-                        'strength': technical_state['trend']['strength'],
-                        'analysis': self._analyze_trend_context(technical_state)
-                    },
-                    'momentum': {
-                        'rsi': technical_state['momentum']['rsi'],
-                        'macd': technical_state['momentum']['macd_hist'],
-                        'analysis': self._analyze_momentum_context(technical_state)
-                    }
-                },
-                'psychological_factors': {
-                    'market_psychology': psych_analysis['patterns']['emotional_patterns'],
-                    'trader_psychology': psych_analysis['patterns']['decision_patterns'],
-                    'recommendations': psych_analysis['recommendations']
-                },
-                'zone_factors': {
-                    'current_zone': zone_analysis['patterns']['current_zone'],
-                    'zone_strength': zone_analysis['strength'],
-                    'breakout_potential': zone_analysis['patterns']['breakout_zones']
-                }
-            }
-            
-            return rationale
-            
-        except Exception as e:
-            self.logger.error(f"Error generating suggestion rationale: {str(e)}")
-            return {}
-
-    def _log_session_stats(self, stats: Dict):
-        """Log session statistics"""
-        try:
-            session_stats = SessionStats(
-                session_id=str(datetime.now().timestamp()),
-                start_time=stats['timestamp'],
-                end_time=datetime.now(),
-                total_trades=len(stats['suggestions']),
-                winning_trades=0,  # To be updated after trade completion
-                losing_trades=0,   # To be updated after trade completion
-                win_rate=0.0,      # To be updated after trade completion
-                avg_profit=0.0,    # To be updated after trade completion
-                max_drawdown=0.0,  # To be calculated from historical data
-                sharpe_ratio=0.0,  # To be calculated from historical data
-                psychological_state=stats['psychological_state'],
-                technical_state=stats['market_state']
-            )
-            
-            # Save session stats
-            self.session_manager.save_session_stats(session_stats)
-            
-        except Exception as e:
-            self.logger.error(f"Error logging session stats: {str(e)}")
-
-    def _prepare_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate technical indicators for analysis"""
-        try:
-            return self.technical_analyzer.calculate_all_indicators(df)
-        except Exception as e:
-            self.logger.error(f"Error calculating technical indicators: {str(e)}")
-            return df
-
-    def _generate_trading_signals(self,
-                                current_data: pd.DataFrame,
-                                market_analysis: Dict,
-                                psych_analysis: Dict,
-                                zone_analysis: Dict) -> List[Dict]:
-        """Generate trading signals based on all analyses"""
-        try:
-            signals = []
-            current_price = float(current_data['close'].iloc[-1])
-            
-            # Get technical signals
-            tech_signals = self.technical_analyzer.generate_signals(market_analysis)
-            
-            # Get psychological adjustments
-            psych_adjustments = self.trading_psychology.get_psychological_advice(
-                psych_analysis['patterns']
-            )
-            
-            # Get zone signals
-            zone_signals = self.zone_analyzer.generate_signals(zone_analysis)
-            
-            # Combine and filter signals
-            for signal in tech_signals:
-                if self._validate_signal(signal, psych_adjustments, zone_signals):
-                    adjusted_signal = self._adjust_signal_parameters(
-                        signal,
-                        psych_adjustments,
-                        zone_signals,
-                        current_price
-                    )
-                    signals.append(adjusted_signal)
-            
-            return signals
-            
-        except Exception as e:
-            self.logger.error(f"Error generating trading signals: {str(e)}")
-            return []
-
-    def _generate_trade_rationale(self,
-                                signal: Dict,
-                                market_analysis: Dict,
-                                psych_analysis: Dict,
-                                zone_analysis: Dict) -> Dict:
-        """Generate detailed rationale for trade suggestion"""
-        try:
-            return {
-                'technical_factors': self._analyze_technical_factors(
-                    signal,
-                    market_analysis
-                ),
-                'psychological_factors': self._analyze_psychological_factors(
-                    signal,
-                    psych_analysis
-                ),
-                'zone_factors': self._analyze_zone_factors(
-                    signal,
-                    zone_analysis
-                ),
-                'risk_factors': self._analyze_risk_factors(signal)
-            }
-        except Exception as e:
-            self.logger.error(f"Error generating trade rationale: {str(e)}")
-            return {}
-
-    def _validate_signal(self, signal: Dict, psych_adjustments: Dict, zone_signals: List[Dict]) -> bool:
-        """Validate trading signal based on psychological adjustments and zone signals"""
-        try:
-            # Check if signal is valid based on psychological adjustments
-            if signal['action'] not in psych_adjustments['patterns']:
-                return False
-            
-            # Check if signal is valid based on zone signals
-            for zone_signal in zone_signals:
-                if zone_signal['action'] == signal['action'] and zone_signal['timeframe'] == signal['timeframe']:
-                    return True
-            
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"Error validating signal: {str(e)}")
-            return False
-
-    def _adjust_signal_parameters(self, signal: Dict, psych_adjustments: Dict, zone_signals: List[Dict], current_price: float) -> Dict:
-        """Adjust signal parameters based on psychological adjustments and zone signals"""
-        try:
-            # Get psychological adjustment for the signal
-            adjustment = psych_adjustments['patterns'][signal['action']]
-            
-            # Get zone signal for the signal
-            zone_signal = next((zone for zone in zone_signals if zone['action'] == signal['action'] and zone['timeframe'] == signal['timeframe']), None)
-            
-            # Adjust signal parameters
-            signal['entry_price'] = float(signal['entry_price']) + adjustment['adjustment']
-            signal['stop_loss'] = float(signal['stop_loss']) + adjustment['stop_loss']
-            signal['take_profit'] = float(signal['take_profit']) + adjustment['take_profit']
-            signal['position_size'] = float(signal['position_size']) * (1 + adjustment['position_size'])
-            signal['risk_reward_ratio'] = float(signal['risk_reward_ratio']) * (1 + adjustment['risk_reward_ratio'])
-            
-            # Calculate new stop loss and take profit based on current price
-            signal['stop_loss'] = self._calculate_stop_loss(signal, zone_signal, current_price)
-            signal['take_profit'] = self._calculate_take_profit(signal, zone_signal, current_price)
-            
-            return signal
-            
-        except Exception as e:
-            self.logger.error(f"Error adjusting signal parameters: {str(e)}")
-            return {}
-
-    def _calculate_stop_loss(self, signal: Dict, zone_signal: Dict, current_price: float) -> float:
-        """Calculate stop loss based on zone signal and current price"""
-        try:
-            # Get zone signal for the signal
-            zone_signal = next((zone for zone in zone_signals if zone['action'] == signal['action'] and zone['timeframe'] == signal['timeframe']), None)
-            
-            # Calculate stop loss based on zone signal and current price
-            stop_loss = current_price - zone_signal['stop_loss']
-            
-            return stop_loss
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating stop loss: {str(e)}")
-            return 0.0
-
-    def _calculate_take_profit(self, signal: Dict, zone_signal: Dict, current_price: float) -> float:
-        """Calculate take profit based on zone signal and current price"""
-        try:
-            # Get zone signal for the signal
-            zone_signal = next((zone for zone in zone_signals if zone['action'] == signal['action'] and zone['timeframe'] == signal['timeframe']), None)
-            
-            # Calculate take profit based on zone signal and current price
-            take_profit = current_price + zone_signal['take_profit']
-            
-            return take_profit
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating take profit: {str(e)}")
-            return 0.0
-
-    def _analyze_technical_factors(self, signal: Dict, market_analysis: Dict) -> Dict:
-        """Analyze technical factors for trading signal"""
-        try:
-            # Get technical state for the signal
-            technical_state = next((state for state in market_analysis['current_state']['technical_state'] if state['action'] == signal['action'] and state['timeframe'] == signal['timeframe']), None)
-            
-            # Analyze technical factors
-            technical_factors = {
-                'trend': {
-                    'direction': technical_state['trend']['direction'],
-                    'strength': technical_state['trend']['strength'],
-                    'analysis': self._analyze_trend_context(technical_state)
-                },
-                'momentum': {
-                    'rsi': technical_state['momentum']['rsi'],
-                    'macd': technical_state['momentum']['macd_hist'],
-                    'analysis': self._analyze_momentum_context(technical_state)
-                }
-            }
-            
-            return technical_factors
-            
-        except Exception as e:
-            self.logger.error(f"Error analyzing technical factors: {str(e)}")
-            return {}
-
-    def _analyze_psychological_factors(self, signal: Dict, psych_analysis: Dict) -> Dict:
-        """Analyze psychological factors for trading signal"""
-        try:
-            # Get psychological state for the signal
-            psychological_state = next((state for state in psych_analysis['patterns'] if state['action'] == signal['action']), None)
-            
-            # Analyze psychological factors
-            psychological_factors = {
-                'market_psychology': psychological_state['emotional_patterns'],
-                'trader_psychology': psychological_state['decision_patterns'],
-                'recommendations': psych_analysis['recommendations']
-            }
-            
-            return psychological_factors
-            
-        except Exception as e:
-            self.logger.error(f"Error analyzing psychological factors: {str(e)}")
-            return {}
-
-    def _analyze_zone_factors(self, signal: Dict, zone_analysis: Dict) -> Dict:
-        """Analyze zone factors for trading signal"""
-        try:
-            # Get zone state for the signal
-            zone_state = next((state for state in zone_analysis['patterns'] if state['action'] == signal['action'] and state['timeframe'] == signal['timeframe']), None)
-            
-            # Analyze zone factors
-            zone_factors = {
-                'current_zone': zone_state['current_zone'],
-                'zone_strength': zone_state['zone_strength'],
-                'breakout_potential': zone_state['breakout_potential']
-            }
-            
-            return zone_factors
-            
-        except Exception as e:
-            self.logger.error(f"Error analyzing zone factors: {str(e)}")
-            return {}
-
-    def _analyze_risk_factors(self, signal: Dict) -> Dict:
-        """Analyze risk factors for trading signal"""
-        try:
-            # Calculate risk factors
-            risk_factors = {
-                'position_size': float(signal['position_size']),
-                'risk_reward_ratio': float(signal['risk_reward_ratio'])
-            }
-            
-            return risk_factors
-            
-        except Exception as e:
-            self.logger.error(f"Error analyzing risk factors: {str(e)}")
-            return {}
-
-    def _analyze_trend_context(self, technical_state: Dict) -> Dict:
-        """Analyze trend context for trading signal"""
-        try:
-            # Analyze trend context
-            trend_context = {
-                'direction': technical_state['trend']['direction'],
-                'strength': technical_state['trend']['strength'],
-                'consistency': technical_state['trend']['consistency']
-            }
-            
-            return trend_context
-            
-        except Exception as e:
-            self.logger.error(f"Error analyzing trend context: {str(e)}")
-            return {}
-
-    def _analyze_momentum_context(self, technical_state: Dict) -> Dict:
-        """Analyze momentum context for trading signal"""
-        try:
-            # Analyze momentum context
-            momentum_context = {
-                'rsi': technical_state['momentum']['rsi'],
-                'macd': technical_state['momentum']['macd_hist'],
-                'analysis': technical_state['momentum']['analysis']
-            }
-            
-            return momentum_context
-            
-        except Exception as e:
-            self.logger.error(f"Error analyzing momentum context: {str(e)}")
-            return {}
+            self.logger.error(f"Error updating features: {str(e)}")
+            return last_features
 
     def _calculate_trend_strength(self, df: pd.DataFrame) -> float:
         """Calculate the strength of the price trend"""
         try:
-            # Calculate short and long term moving averages
             short_ma = df['close'].rolling(window=20).mean()
             long_ma = df['close'].rolling(window=50).mean()
             
-            # Calculate trend strength based on MA crossovers and slope
             trend_strength = (short_ma - long_ma) / long_ma
-            
-            # Normalize between -1 and 1
-            return trend_strength.clip(-1, 1)
+            return float(trend_strength.iloc[-1].clip(-1, 1))
             
         except Exception as e:
             self.logger.error(f"Error calculating trend strength: {str(e)}")
             return 0.0
+
     def _calculate_trend_consistency(self, df: pd.DataFrame) -> float:
         """Calculate the consistency of the price trend"""
         try:
-            # Calculate short and long term moving averages
             short_ma = df['close'].rolling(window=20).mean()
             long_ma = df['close'].rolling(window=50).mean()            
-            # Calculate trend consistency based on MA crossovers and slope
             trend_consistency = (short_ma - long_ma) / long_ma
             
-            # Normalize between -1 and 1
-            return trend_consistency.clip(-1, 1)
+            return float(trend_consistency.iloc[-1].clip(-1, 1))
         except Exception as e:
             self.logger.error(f"Error calculating trend consistency: {str(e)}")
             return 0.0
 
-    async def train(self, data_feed: pd.DataFrame):
-        """Train the model using historical data"""
+    def _get_initial_psychological_state(self) -> Dict:
+        """Get initial psychological state"""
         try:
-            self.logger.info("Starting training process")
-
-            # Calculate data points for 7 days at 5-minute intervals
-            total_points = 7 * 24 * 12  # 12 five-minute intervals per hour
-            
-            if len(data_feed) < total_points:
-                raise ValueError("Insufficient data for training")
-
-            # Split data into training and evaluation sets
-            train_size = int(total_points * (6.5/7))  # Use 6.5 days for training
-            train_data = data_feed.iloc[:train_size]
-            eval_data = data_feed.iloc[train_size:train_size + 24]  # Next 2 hours for evaluation
-
-            session_predictions = []
-            
-            # Create multiple training sessions
-            for _ in range(self.min_sessions):
-                # Initialize and train model
-                model = self._initialize_model()
-                await self._train_model(model, train_data)
-                
-                # Generate predictions
-                predictions = await self._predict_future(model, train_data)
-                
-                # Evaluate predictions
-                actual = eval_data['close'].values
-                performance = self._evaluate_predictions(predictions, actual)
-                
-                # Create session stats
-                session_id = str(datetime.now().timestamp())
-                session_stats = SessionStats(
-                    session_id=session_id,
-                    start_time=datetime.now(),
-                    end_time=datetime.now(),
-                    total_trades=len(predictions),
-                    winning_trades=sum(1 for p, a in zip(predictions, actual) if abs(p-a)/a < 0.01),
-                    losing_trades=sum(1 for p, a in zip(predictions, actual) if abs(p-a)/a >= 0.01),
-                    win_rate=performance['accuracy'],
-                    avg_profit=performance['avg_profit'],
-                    max_drawdown=performance['max_drawdown'],
-                    sharpe_ratio=performance['sharpe_ratio'],
-                    psychological_state=self.trading_psychology.analyze_trader_psychology(
-                        train_data, 
-                        self.zone_analyzer.identify_zone(train_data['close'].values)
-                    ),
-                    technical_state=self._calculate_technical_state(train_data)
-                )
-                
-                self.session_manager.save_session_stats(session_stats)
-                session_predictions.append({
-                    'session_id': session_id,
-                    'model': model,
-                    'performance': performance
-                })
-
-            # Rank sessions and maintain minimum count
-            self.session_manager.rank_sessions()
-            self.session_manager.maintain_min_sessions(self.min_sessions)
-            
-            # Reinforce model using best performing sessions
-            await self._reinforce_model(session_predictions)
-            
-            self.logger.info("Training completed successfully")
-            
-        except Exception as e:
-            self.logger.error(f"Error during training: {str(e)}")
-            raise
-
-    async def _train_model(self, model, train_data: pd.DataFrame):
-        """Train the model on historical data"""
-        try:
-            # Prepare features
-            features = self._prepare_prediction_features(train_data)
-            X, y = self._prepare_sequences(features, train_data['close'])
-            
-            # Train model
-            model.fit(
-                X, y,
-                epochs=50,
-                batch_size=32,
-                validation_split=0.2,
-                verbose=0
-            )
-            
-            # Save weights
-            self.model_weights = model.get_weights()
-            
-        except Exception as e:
-            self.logger.error(f"Error training model: {str(e)}")
-            raise
-
-    def _initialize_model(self):
-        """Initialize the LSTM model"""
-        try:
-            input_shape = (self.look_back, self._get_feature_count())
-            model = build_lstm_model(input_shape)
-            
-            if self.model_weights is not None:
-                model.set_weights(self.model_weights)
-                
-            return model
-            
-        except Exception as e:
-            self.logger.error(f"Error initializing model: {str(e)}")
-            raise
-
-    def _get_feature_count(self) -> int:
-        """Get the number of features used in the model"""
-        # Count of features used in _prepare_prediction_features
-        return 6  # Adjust based on actual feature count
-
-    async def _predict_future(self, model, data: pd.DataFrame, steps: int = 24) -> List[float]:
-        """Generate predictions for future time steps"""
-        try:
-            # Prepare latest data
-            features = self._prepare_prediction_features(data)
-            last_sequence = features.iloc[-self.look_back:].values
-            
-            predictions = []
-            current_sequence = last_sequence.copy()
-            
-            # Generate predictions for each future step
-            for _ in range(steps):
-                # Reshape sequence for prediction
-                X = current_sequence.reshape(1, self.look_back, -1)
-                
-                # Generate prediction
-                pred = model.predict(X, verbose=0)[0][0]
-                predictions.append(pred)
-                
-                # Update sequence for next prediction
-                current_sequence = np.roll(current_sequence, -1, axis=0)
-                current_sequence[-1] = self._update_features(current_sequence[-2], pred)
-                
-            return predictions
-            
-        except Exception as e:
-            self.logger.error(f"Error generating predictions: {str(e)}")
-            raise
-
-    def _prepare_sequences(self, features: pd.DataFrame, target: pd.Series):
-        """Prepare sequences for LSTM training"""
-        X, y = [], []
-        
-        for i in range(len(features) - self.look_back):
-            X.append(features.iloc[i:i + self.look_back].values)
-            y.append(target.iloc[i + self.look_back])
-            
-        return np.array(X), np.array(y)
-
-    def _evaluate_predictions(self, predictions: List[float], actual: np.ndarray) -> Dict:
-        """Evaluate prediction performance"""
-        try:
-            predictions = np.array(predictions[:len(actual)])
-            
-            # Calculate metrics
-            mse = np.mean((predictions - actual) ** 2)
-            mae = np.mean(np.abs(predictions - actual))
-            accuracy = np.mean(np.abs(predictions - actual) / actual < 0.01)
-            
-            # Calculate returns
-            pred_returns = np.diff(predictions) / predictions[:-1]
-            actual_returns = np.diff(actual) / actual[:-1]
-            
-            # Calculate Sharpe ratio
-            excess_returns = pred_returns - 0.02/252  # Assuming 2% risk-free rate
-            sharpe_ratio = np.mean(excess_returns) / np.std(excess_returns) if len(excess_returns) > 0 else 0
-            
-            # Calculate max drawdown
-            cumulative_returns = np.cumprod(1 + pred_returns)
-            max_drawdown = np.min(cumulative_returns / np.maximum.accumulate(cumulative_returns) - 1)
-            
             return {
-                'mse': float(mse),
-                'mae': float(mae),
-                'accuracy': float(accuracy),
-                'sharpe_ratio': float(sharpe_ratio),
-                'max_drawdown': float(max_drawdown),
-                'avg_profit': float(np.mean(pred_returns))
+                'confidence': 0.5,
+                'emotional_balance': 0.5,
+                'risk_tolerance': 0.5,
+                'stress_level': 0.3
             }
-            
         except Exception as e:
-            self.logger.error(f"Error evaluating predictions: {str(e)}")
-            raise
+            self.logger.error(f"Error getting initial psychological state: {str(e)}")
+            return {}
 
-    async def _reinforce_model(self, session_predictions: List[Dict]):
-        """Reinforce model using best performing sessions"""
+    def _get_initial_technical_state(self) -> Dict:
+        """Get initial technical state"""
         try:
-            # Sort sessions by performance
-            sorted_sessions = sorted(
-                session_predictions,
-                key=lambda x: x['performance']['sharpe_ratio'] - x['performance']['max_drawdown'],
-                reverse=True
-            )
-            
-            # Get top performing session
-            best_session = sorted_sessions[0]
-            
-            # Update model weights
-            self.model_weights = best_session['model'].get_weights()
-            
-            # Save best model
-            self._save_model(best_session['model'], best_session['session_id'])
-            
+            return {
+                'trend': {
+                    'direction': 'neutral',
+                    'strength': 0.5
+                },
+                'momentum': 0.0,
+                'volatility': 0.0,
+                'support_resistance': {
+                    'support': 0.0,
+                    'resistance': 0.0
+                }
+            }
         except Exception as e:
-            self.logger.error(f"Error reinforcing model: {str(e)}")
-            raise
+            self.logger.error(f"Error getting initial technical state: {str(e)}")
+            return {}
 
-    def _save_model(self, model, session_id: str):
-        """Save model to disk"""
-        try:
-            model_dir = os.path.join(self.model_path, session_id)
-            os.makedirs(model_dir, exist_ok=True)
-            model.save(os.path.join(model_dir, 'model.h5'))
-        except Exception as e:
-            self.logger.error(f"Error saving model: {str(e)}")
-            raise
