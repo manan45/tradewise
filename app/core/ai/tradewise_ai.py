@@ -680,7 +680,7 @@ async def start_training(symbol):
 
 
 class TradewiseAI:
-    def __init__(self, ...):
+    def __init__(self):
         # Add to existing initialization
         self.trading_psychology = TradingPsychology()
     
