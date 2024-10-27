@@ -914,29 +914,6 @@ class TradewiseAI:
                     suggestion['Action'] = 'BUY'
                 elif sentiment_score < -0.5:
                     suggestion['Action'] = 'SELL'
-                    'id': i,
-                    'timestamp': forecast['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
-                    'Action': forecast['signals']['action'],
-                    'Summary': {
-                        'Current Price': f"${forecast['price']['current']:.2f}",
-                        'Predicted Price': f"${forecast['price']['predicted']:.2f}",
-                        'Expected Change': f"{((forecast['price']['predicted'] / forecast['price']['current']) - 1) * 100:.2f}%",
-                        'Confidence': f"{forecast['signals']['confidence'] * 100:.1f}%"
-                    },
-                    'Technical Analysis': {
-                        'RSI': f"{forecast['indicators']['rsi']:.1f}",
-                        'Signal Strength': f"{forecast['signals']['strength']:.2f}",
-                        'Volatility': f"{forecast['price']['volatility']:.2f}",
-                    },
-                    'Volume Analysis': {
-                        'Trend': forecast['volume']['trend'],
-                        'Strength': f"{forecast['volume']['strength'] * 100:.1f}%"
-                    },
-                    'Support/Resistance': {
-                        'Support': f"${forecast['price']['support']:.2f}",
-                        'Resistance': f"${forecast['price']['resistance']:.2f}"
-                    }
-                }
                 suggestions.append(suggestion)
             
             return suggestions
