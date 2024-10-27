@@ -569,10 +569,8 @@ async def start_training(symbol):
     except Exception as e:
         print(f"An error occurred while generating trade suggestions: {str(e)}")
         traceback.print_exc()
-
-    
-            logging.error(f"Error calculating psychological biases: {str(e)}")
-            return {}
+        logging.error(f"Error calculating psychological biases: {str(e)}")
+        return {}
 
     def _calculate_anchoring_bias(self, df: pd.DataFrame) -> float:
         """Calculate susceptibility to anchoring bias"""
