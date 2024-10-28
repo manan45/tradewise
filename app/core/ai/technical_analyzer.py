@@ -67,7 +67,7 @@ class TechnicalPatternAnalyzer:
             data['atr'] = true_range.rolling(window=14).mean()
             
             # Forward fill NaN values
-            data = data.fillna(method='ffill').fillna(method='bfill')
+            data = data.ffill().bfill()
             
             return data
             

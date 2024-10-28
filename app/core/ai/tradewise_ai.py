@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from tensorflow.keras.models import Model
+import traceback
 
 from app.core.ai.technical_analyzer import TechnicalPatternAnalyzer
 from app.core.ai.market_environment import MarketEnvironment
@@ -39,6 +40,7 @@ class SessionStats:
     model: Optional[object] = None
     reinforcement_stats: Optional[Dict] = None
     prediction_accuracy: Optional[float] = None
+    final_balance: float = 0.0  # Add this line
 
 class TradewiseAI:
     def __init__(self, 
@@ -98,7 +100,7 @@ class TradewiseAI:
             }
             
             # Start training session in session manager's logger
-            training_session_id = self.session_manager.session_logger.start_training_session(training_config)
+            self.session_manager.session_logger.start_training_session(training_config)
             
             # Initialize market environment
             market_env = self._initialize_market_environment(data_feed)
@@ -107,14 +109,14 @@ class TradewiseAI:
             best_performance = float('-inf')
             
             # Training parameters
-            n_episodes = 15
-            sessions_per_episode = 10
+            n_episodes = 5
+            sessions_per_episode = 5
             max_steps = min(20, len(data_feed) - 1)
             
             try:
                 for episode in range(n_episodes):
                     # Start new episode in session manager
-                    episode_log = self.session_manager.session_logger.start_episode(episode)
+                    self.session_manager.session_logger.start_episode(episode)
                     
                     # Initialize episode model
                     input_shape = (market_env.state_size,)
@@ -183,120 +185,6 @@ class TradewiseAI:
             self.logger.error(f"Error during training: {str(e)}")
             raise
 
-    async def _run_training_session(self,
-                                  session_id: str,
-                                  model: Model,
-                                  market_env: MarketEnvironment,
-                                  data_feed: pd.DataFrame,
-                                  max_steps: int) -> SessionStats:
-        """Run a single training session with proper forecast handling"""
-        try:
-            # Create new trading session
-            trading_session = self.session_manager.create_new_session(
-                market_data=data_feed,
-                initial_conditions={
-                    'psychology': self._get_initial_psychological_state(),
-                    'zones': self.zone_analyzer.identify_zone(data_feed['close'].values)
-                }
-            )
-            
-            # Initialize state and tracking variables
-            state = market_env.reset()
-            total_reward = 0.0
-            session_trades = []
-            session_start_time = datetime.now()
-            
-            for step in range(max_steps):
-                # Ensure we have valid data indices
-                if step >= len(data_feed):
-                    break
-                
-                # Handle NaN states
-                if np.any(np.isnan(state)):
-                    state = np.nan_to_num(state, nan=0.0)
-                
-                # Generate forecast
-                current_data = data_feed.iloc[step]
-                forecast = self._generate_forecast(model, state, current_data)
-                
-                # Get action from forecast's best action
-                action = int(forecast['best_action'])  # Ensure integer action
-                
-                # Take action
-                next_state, reward, done, info = market_env.step(action)
-                
-                # Ensure valid reward
-                reward = float(np.clip(np.nan_to_num(reward, 0.0), -1.0, 1.0))
-                
-                # Store trade if executed
-                if isinstance(info, dict) and info.get('trade_executed', False):
-                    session_trades.append(info)
-                
-                # Train on experience
-                loss = self._train_on_experience(
-                    model,
-                    state,
-                    action,
-                    reward,
-                    next_state,
-                    done
-                )
-                
-                # Log reinforcement update
-                self.session_manager.session_logger.log_reinforcement_update(
-                    state=state,
-                    action=action,
-                    reward=reward,
-                    next_state=next_state,
-                    q_values_before=forecast['q_values'],
-                    q_values_after=model.predict_on_batch(next_state.reshape(1, -1))[0].tolist(),
-                    epsilon=self.epsilon,
-                    loss=loss
-                )
-                
-                # Log forecast with safe index access
-                next_price = data_feed.iloc[step + 1]['close'] if step + 1 < len(data_feed) else None
-                self.session_manager.session_logger.log_forecast(
-                    predicted_values=forecast['values'],
-                    confidence=forecast['confidence'],
-                    technical_indicators=forecast['technical_state'],
-                    actual_value=next_price
-                )
-                
-                # Update state and reward
-                state = next_state
-                total_reward += reward
-                
-                if done:
-                    break
-            
-            # Calculate session metrics
-            session_stats = SessionStats(
-                session_id=session_id,
-                start_time=session_start_time,
-                end_time=datetime.now(),
-                total_trades=len(session_trades),
-                winning_trades=sum(1 for t in session_trades if t.get('trade_profit', 0) > 0),
-                losing_trades=sum(1 for t in session_trades if t.get('trade_profit', 0) <= 0),
-                win_rate=len([t for t in session_trades if t.get('trade_profit', 0) > 0]) / max(len(session_trades), 1),
-                avg_profit=np.mean([t.get('trade_profit', 0) for t in session_trades]) if session_trades else 0.0,
-                max_drawdown=max([abs(t.get('trade_profit', 0)) for t in session_trades]) if session_trades else 0.0,
-                sharpe_ratio=self._calculate_sharpe_ratio(session_trades),
-                psychological_state=trading_session.psychological_state,
-                technical_state=trading_session.technical_state,
-                reinforcement_stats={
-                    'total_reward': float(total_reward),
-                    'avg_reward': float(total_reward / max_steps),
-                    'final_epsilon': float(self.epsilon)
-                },
-                final_balance=trading_session.final_balance or 100000.0
-            )
-            
-            return session_stats
-            
-        except Exception as e:
-            self.logger.error(f"Error running training session: {str(e)}")
-            raise
 
     def _calculate_sharpe_ratio(self, trades: List[Dict]) -> float:
         """Calculate Sharpe ratio with safety checks"""
@@ -343,39 +231,6 @@ class TradewiseAI:
             self.logger.error(f"Error initializing market environment: {str(e)}")
             raise
 
-    def _train_on_experience(self,
-                           model: Model,
-                           state: np.ndarray,
-                           action: int,
-                           reward: float,
-                           next_state: np.ndarray,
-                           done: bool):
-        """Train model on single experience tuple using ModelBuilder"""
-        try:
-            # Get current Q-values using predict_on_batch
-            state_batch = state.reshape(1, -1)
-            current_q = model.predict_on_batch(state_batch)[0]
-            
-            # Get next Q-values using predict_on_batch
-            next_state_batch = next_state.reshape(1, -1)
-            next_q = model.predict_on_batch(next_state_batch)[0]
-            
-            # Update Q-value for taken action
-            if done:
-                current_q[action] = reward
-            else:
-                current_q[action] = reward + self.gamma * np.max(next_q)
-            
-            # Train model using ModelBuilder's methods
-            self.model_builder.train_on_batch(
-                model,
-                state_batch,
-                current_q.reshape(1, -1)
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Error training on experience: {str(e)}")
-            raise
 
     def _update_session_stats(self,
                             session: SessionStats,
@@ -866,23 +721,23 @@ class TradewiseAI:
                 'risk_reward': 0.0
             }
 
-    def _calculate_technical_state(self, df: pd.DataFrame) -> Dict:
-        """Calculate current technical state of the market"""
+    def _calculate_technical_state(self, data: pd.DataFrame) -> Dict:
+        """Calculate technical indicators from market data."""
         try:
-            latest = df.iloc[-1]
-            
+            # Ensure data is a DataFrame
+            if not isinstance(data, pd.DataFrame):
+                raise ValueError("Data must be a pandas DataFrame")
+
+            # Example: Calculate a rolling mean
+            if 'close' in data:
+                rolling_mean = data['close'].rolling(window=20).mean()
+                # Add more technical calculations as needed
+            else:
+                raise ValueError("Data must contain 'close' column")
+
             return {
-                'trend': {
-                    'direction': 'up' if latest['close'] > df['close'].mean() else 'down',
-                    'strength': float(self._calculate_trend_strength(df)),
-                    'consistency': float(self._calculate_trend_consistency(df))
-                },
-                'momentum': {
-                    'rsi': float(latest.get('rsi', 50)),
-                    'macd': float(latest.get('macd', 0)),
-                    'macd_hist': float(latest.get('macd_hist', 0))
-                },
-                'volatility': float(latest['close'].rolling(window=20).std())
+                'rolling_mean': rolling_mean.iloc[-1] if not rolling_mean.empty else None,
+                # Add more indicators as needed
             }
         except Exception as e:
             self.logger.error(f"Error calculating technical state: {str(e)}")
@@ -1296,7 +1151,7 @@ class TradewiseAI:
             
             # Adjust confidence based on technical indicators
             technical_confidence = self._calculate_technical_confidence(technical_state)
-            
+
             # Combined confidence score
             confidence = float(np.clip((q_confidence + technical_confidence) / 2, 0, 1))
 
@@ -1521,6 +1376,7 @@ class TradewiseAI:
                 reinforcement_stats=rl_metrics,
                 prediction_accuracy=forecast_accuracy,
                 model=None,  # Model can be attached later if needed
+                final_balance=balance_curve[-1]
             )
             
             # Additional metrics for logging
@@ -1634,5 +1490,166 @@ class TradewiseAI:
 
 
 
+    def _train_on_experience(self,
+                            model: Model,
+                            state: np.ndarray,
+                            action: int,
+                            reward: float,
+                            next_state: np.ndarray,
+                            done: bool) -> float:
+        """Train model on single experience tuple using ModelBuilder"""
+        try:
+            # Get current Q-values using predict_on_batch
+            state_batch = state.reshape(1, -1)
+            current_q = model.predict_on_batch(state_batch)[0]
+            
+            # Get next Q-values using predict_on_batch
+            next_state_batch = next_state.reshape(1, -1)
+            next_q = model.predict_on_batch(next_state_batch)[0]
+            
+            # Update Q-value for taken action
+            if done:
+                current_q[action] = reward
+            else:
+                current_q[action] = reward + self.gamma * np.max(next_q)
+            
+            # Train model using ModelBuilder's methods
+            loss = self.model_builder.train_on_batch(
+                model,
+                state_batch,
+                current_q.reshape(1, -1)
+            )
+            
+            return float(loss)
+            
+        except Exception as e:
+            self.logger.error(f"Error training on experience: {str(e)}")
+            return 0.0
 
+    async def _run_training_session(self,
+                                session_id: str,
+                                model: Model,
+                                market_env: MarketEnvironment,
+                                data_feed: pd.DataFrame,
+                                max_steps: int) -> SessionStats:
+        """Run a single training session with proper forecast handling"""
+        try:
+            # Create new trading session
+            # Check if session exists
+            existing_session = self.session_manager.active_sessions.get(session_id)
+            if existing_session:
+                # Use existing session parameters
+                session = existing_session['session']
+                market_data = existing_session['market_data']
+                conditions = existing_session['conditions']
+            else:
+                # Create new session with default parameters
+                session = self.session_manager.create_new_session(
+                    market_data=data_feed,
+                    initial_conditions={
+                        'psychology': self._get_initial_psychological_state(),
+                        'zones': self.zone_analyzer.identify_zone(data_feed['close'].values)
+                    }
+                )
+            
+            # Initialize state and tracking variables
+            state = market_env.reset()
+            total_reward = 0.0
+            session_trades = []
+            session_start_time = datetime.now()
+            forecasts = []
+            
+            for step in range(max_steps):
+                try:
+                    # Ensure we have valid data indices
+                    if step >= len(data_feed):
+                        break
+                    
+                    # Handle NaN states
+                    if np.any(np.isnan(state)):
+                        state = np.nan_to_num(state, nan=0.0)
+                    
+                    # Generate forecast
+                    current_data = data_feed.iloc[step]
+                    forecast = self._generate_forecast(model, state, current_data)
+                    forecasts.append(forecast)
+                    
+                    # Get action from forecast's best action
+                    action = forecast['best_action']
+                    
+                    # Take step in environment and handle the returned values correctly
+                    step_result = market_env.step(action)
+                    
+                    # Properly unpack the step result regardless of length
+                    if len(step_result) == 5:
+                        next_state, reward, done, truncated, info = step_result
+                    else:
+                        # Handle cases where we get 4 values (older gym version)
+                        next_state, reward, done, info = step_result
+                        truncated = False
+                    
+                    # Ensure valid reward
+                    reward = float(np.clip(np.nan_to_num(reward, 0.0), -1.0, 1.0))
+                    
+                    # Store trade if executed
+                    if isinstance(info, dict) and info.get('trade_executed', False):
+                        session_trades.append(info)
+                    
+                    # Train on experience and get loss
+                    loss = self._train_on_experience(
+                        model,
+                        state,
+                        action,
+                        reward,
+                        next_state,
+                        done
+                    )
+                    
+                    # Log reinforcement update
+                    self.session_manager.session_logger.log_reinforcement_update(
+                        state=state,
+                        action=action,
+                        reward=reward,
+                        next_state=next_state,
+                        q_values_before=forecast['q_values'],
+                        q_values_after=model.predict_on_batch(next_state.reshape(1, -1))[0].tolist(),
+                        epsilon=self.epsilon,
+                        loss=loss
+                    )
+                    
+                    # Log forecast with safe index access
+                    next_price = data_feed.iloc[step + 1]['close'] if step + 1 < len(data_feed) else None
+                    self.session_manager.session_logger.log_forecast(
+                        predicted_values=forecast['values'],
+                        confidence=forecast['confidence'],
+                        technical_indicators=forecast['technical_state'],
+                        actual_value=next_price
+                    )
+                    
+                    # Update state and reward
+                    state = next_state
+                    total_reward += reward
+                    
+                    if done or truncated:
+                        break
 
+                except Exception as step_error:
+                    self.logger.error(f"Error during step {step}: {str(step_error)}")
+                    self.logger.error(traceback.format_exc())
+                    continue
+            
+            # Calculate session metrics
+            session_stats = self._calculate_session_metrics(
+                session_id=session_id,
+                trades=session_trades,
+                forecasts=forecasts,
+                total_reward=total_reward,
+                initial_balance=100000.0
+            )
+            
+            return session_stats
+            
+        except Exception as e:
+            self.logger.error(f"Error running training session: {str(e)}")
+            self.logger.error(traceback.format_exc())
+            raise

@@ -262,3 +262,4 @@ class ModelBuilder:
         except Exception as e:
             logger.error(f"Error training on batch: {str(e)}")
             raise
+

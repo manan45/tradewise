@@ -2,85 +2,144 @@
 
 ## Overview
 
-This application provides stock trading suggestions using AI models. It follows clean architecture principles to ensure maintainability and scalability.
+This application provides intelligent stock trading suggestions using advanced AI models. It follows clean architecture principles and implements sophisticated machine learning techniques for market analysis.
 
 ## System Architecture
 
+### High-Level Architecture
 ![Trade Management Architecture](docs/architecture.svg)
 
-## Architecture
+### AI Model Architecture
+![Tradewise AI Architecture](docs/tradewise_ai.svg)
 
-Our application follows a modular architecture designed for scalability and maintainability:
+## Architecture Components
 
-1. Data Pipeline:
-   - External Data API: Source of stock data
-   - Data Fetcher: Retrieves data from the API
-   - Kafka Queue: Manages data flow
-   - Data Consumer: Processes queued data
+Our application consists of two main architectural layers:
 
-2. Machine Learning:
-   - Trainer: Trains AI models on historical data
-   - Tradewise Model: Generates stock price forecasts
+### 1. System Architecture
+- **Data Pipeline**:
+  - External Data API: Source of stock data
+  - Data Fetcher: Retrieves data from API
+  - Kafka Queue: Manages data flow
+  - Data Consumer: Processes queued data
 
-3. Application Layer:
-   - Backend: Serves data and predictions via API
+- **Application Layer**:
+  - Backend API: Serves data and predictions
+  - Database: PostgreSQL for data storage
+  - Model Service: Handles AI predictions
 
-4. Database:
-   - PostgreSQL: Stores historical and forecasted data
+### 2. AI Model Architecture
+
+1. Model Trainer
+   - Data Splitting: Separates data into training and evaluation sets
+   - Training Set: Used for model training
+   - Evaluation Set: Used for model validation
+   - Prediction Generation: Creates trading predictions
+   - Accuracy Evaluation: Measures model performance
+
+2. Tradewise Model
+   - Core Components:
+     - Trading Psychology: Analyzes market sentiment and behavior patterns
+     - Zone Analysis: Identifies key support/resistance zones
+     - Technical Analysis: Processes technical indicators
+   
+   - Data Processing:
+     - Time Series Data: Handles temporal market data
+     - Market Data: Processes real-time market information
+     - Trading Suggestions: Generates actionable trade recommendations
+   
+   - Model Logic:
+     - Forecasting: Predicts future market movements
+     - Prediction Accuracy: Evaluates forecast reliability
+     - Performance Metrics: Tracks model effectiveness
+   
+   - Session Management:
+     - Performance Tracking: Monitors trading session performance
+     - Model Optimization: Tunes model parameters
+     - Model Reinforcement: Improves model through learning
+
+3. Data Storage
+   - PostgreSQL Database: Stores historical data, predictions, and performance metrics
+   - Enables persistent storage of:
+     - Historical market data
+     - Model predictions
+     - Performance metrics
+     - Training results
+
+## Data Flow
+
+1. External data flows through the data pipeline
+2. Data is processed and stored in PostgreSQL
+3. Model Trainer processes data for AI training
+4. Tradewise Model:
+   - Processes incoming market data
+   - Generates predictions
+   - Tracks performance
+   - Continuously optimizes itself
+5. Results are stored and served via API
 
 ## Project Structure
 
-- `/app`: Contains the application code.
-  - `/api`: API layer for handling HTTP requests.
-  - `/core`: Core business logic and domain models.
-  - `/services`: Services for data fetching, processing, and AI training.
-  - `/pipelines`: Data pipelines for fetching and ingesting stock data.
-  - `/connectors`: Database and message queue connectors.
-- `/infra`: Infrastructure-related files (Docker, etc.).
-- `/migrations`: Database migration scripts.
+- `/app`: Application code
+  - `/core`: Core business logic
+    - `/ai`: AI model implementations
+    - `/domain`: Domain models and interfaces
+    - `/use_cases`: Business logic implementation
+  - `/api`: API endpoints
+  - `/infrastructure`: External service integrations
 
-## Setup
+- `/docs`: Documentation and diagrams
+- `/infra`: Infrastructure configuration
+- `/migrations`: Database migrations
+
+## Setup and Installation
 
 1. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-2. Set up environment variables:
-   ```
+2. Configure environment:
+   ```bash
    cp .env.example .env
    ```
-   Edit the `.env` file with your configuration.
 
 3. Start services:
    ```bash
    make start-services
    ```
 
-## Running the Application
+## Running Components
 
-- API server: `make run-api`
-- Data service: `make run-data-service`
-- Training service: `make run-training-service`
+```bash
+# Start API server
+make run-api
 
-## API Documentation
+# Run model training
+make run-trainer
 
-Access the API documentation at `http://localhost:8000/docs` after starting the server.
+# Start prediction service
+make run-predictions
+```
 
 ## Technologies Used
 
-- FastAPI: Backend API framework
-- Kafka: Queue system for data pipeline
-- PostgreSQL: Database for storing stock data and predictions
-- SQLAlchemy: ORM for database operations
-- Pandas, NumPy: Data processing
-- Scikit-learn, Keras, Prophet: AI and machine learning libraries
-- Docker: Containerization
+- **AI/ML**: 
+  - TensorFlow/Keras: Deep learning models
+  - Scikit-learn: Machine learning algorithms
+  - Pandas: Data processing
+  - NumPy: Numerical computations
+
+- **Infrastructure**:
+  - PostgreSQL: Data storage
+  - Docker: Containerization
+  - FastAPI: API framework
+  - Kafka: Message queue
 
 ## Contributing
 
-Please read our contributing guidelines before submitting pull requests.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.

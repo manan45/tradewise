@@ -1,8 +1,9 @@
 from dataclasses import dataclass
-from typing import List, Dict
+from typing import List, Dict, Union
 import numpy as np
 import pandas as pd
 from datetime import datetime
+import logging
 
 @dataclass
 class SessionState:
@@ -38,13 +39,21 @@ class TradingSession:
         self.state_history = []
         self.performance_metrics = {}
         
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
+        
     def initialize_session(self, 
                          initial_psychology: Dict, 
                          market_data: pd.DataFrame,
-                         zones: Dict):
+                         zones: Union[Dict, List]):
         """Initialize a new trading session"""
         self.psychological_state = initial_psychology  # Changed from psychology to initial_psychology
         self.technical_state = self._analyze_technical_state(market_data)
+        
+        # Convert zones list to dict if needed
+        if isinstance(zones, list):
+            zones = {'levels': zones}
+            
         self.zone_state = self._analyze_zone_state(market_data, zones)
         self.current_interval = 0
         self.balance = self.initial_balance
@@ -76,23 +85,12 @@ class TradingSession:
             }
         }
     
-    def _analyze_zone_state(self, df: pd.DataFrame, zones: Dict) -> Dict:
-        """Analyze price zones state"""
-        current_price = float(df['close'].iloc[-1])
-        
-        return {
-            'current_price': current_price,
-            'nearest_support': max([z for z in zones['support_zones'] if z < current_price], default=current_price*0.9),
-            'nearest_resistance': min([z for z in zones['resistance_zones'] if z > current_price], default=current_price*1.1),
-            'zone_strength': float(zones.get('zone_strength', 0.5)),
-            'in_support_zone': zones.get('in_support_zone', False),
-            'in_resistance_zone': zones.get('in_resistance_zone', False)
-        }
+
     
     def update_session(self, 
                       new_price: float,
                       market_data: pd.DataFrame,
-                      zones: Dict,
+                      zones: Union[Dict, List],
                       prediction: Dict) -> Dict:
         """Update session state with new market data"""
         self.current_interval += 1
@@ -100,6 +98,11 @@ class TradingSession:
         # Update states
         self._update_psychological_state(new_price, prediction)
         self.technical_state = self._analyze_technical_state(market_data)
+        
+        # Convert zones list to dict if needed
+        if isinstance(zones, list):
+            zones = {'levels': zones}
+            
         self.zone_state = self._analyze_zone_state(market_data, zones)
         
         # Process any open positions
@@ -164,18 +167,7 @@ class TradingSession:
             })
             self.position = None
             
-    def _record_state(self):
-        """Record current session state"""
-        state = {
-            'interval': self.current_interval,
-            'psychological_state': self.psychological_state.copy(),
-            'technical_state': self.technical_state.copy(),
-            'zone_state': self.zone_state.copy(),
-            'balance': self.balance,
-            'has_position': self.position is not None
-        }
-        self.state_history.append(state)
-        
+  
     def _generate_session_insights(self) -> Dict:
         """Generate insights from current session state"""
         return {
@@ -344,4 +336,138 @@ class TradingSession:
                                sum(pnl for pnl in pnls if pnl < 0)) if any(pnl < 0 for pnl in pnls) else float('inf'),
             'psychological_stability': self.psychological_state.get('emotional_balance', 0.5)
         }
+    
+    def _analyze_zone_state(self, market_data: pd.DataFrame, zones: Union[Dict, List]) -> Dict:
+        """Analyze the zone state based on market data and zones.
+        
+        Args:
+            market_data: DataFrame containing market price data
+            zones: Dictionary or List containing zone information
+            
+        Returns:
+            Dictionary containing analyzed zone state
+        """
+        try:
+            # Get current price safely
+            current_price = float(market_data['close'].iloc[-1])
+            
+            # Initialize default zone state
+            zone_state = {
+                'current_price': current_price,
+                'nearest_support': current_price * 0.9,
+                'nearest_resistance': current_price * 1.1,
+                'zone_strength': 0.5,
+                'in_support_zone': False,
+                'in_resistance_zone': False,
+                'support_zones': [],
+                'resistance_zones': []
+            }
+            
+            # Convert list to dict if needed
+            if isinstance(zones, list):
+                zones = {'levels': zones}
+            
+            # Validate zones is now a dict
+            if not isinstance(zones, dict):
+                self.logger.warning(f"Invalid zones type after conversion: {type(zones)}, expected dict")
+                return zone_state
+                
+            # Handle different possible zone dictionary structures
+            if 'support_zones' in zones and 'resistance_zones' in zones:
+                # Standard format
+                support_zones = zones['support_zones']
+                resistance_zones = zones['resistance_zones']
+            elif 'levels' in zones:
+                # Alternative format with combined levels
+                support_zones = [level for level in zones['levels'] if level < current_price]
+                resistance_zones = [level for level in zones['levels'] if level > current_price]
+            elif 'zones' in zones:
+                # Another possible format
+                support_zones = [z['price'] for z in zones['zones'] if z.get('type') == 'support']
+                resistance_zones = [z['price'] for z in zones['zones'] if z.get('type') == 'resistance']
+            else:
+                # Try to extract any numeric values as zones
+                all_zones = [v for v in zones.values() if isinstance(v, (int, float))]
+                support_zones = [z for z in all_zones if z < current_price]
+                resistance_zones = [z for z in all_zones if z > current_price]
+            
+            # Ensure zones are lists of numbers
+            support_zones = [float(z) for z in support_zones if isinstance(z, (int, float))]
+            resistance_zones = [float(z) for z in resistance_zones if isinstance(z, (int, float))]
+            
+            # Calculate nearest zones
+            if support_zones:
+                zone_state['nearest_support'] = max([z for z in support_zones if z < current_price], 
+                                                default=current_price * 0.9)
+            
+            if resistance_zones:
+                zone_state['nearest_resistance'] = min([z for z in resistance_zones if z > current_price],
+                                                    default=current_price * 1.1)
+            
+            # Calculate zone distances
+            support_distance = (current_price - zone_state['nearest_support']) / current_price
+            resistance_distance = (zone_state['nearest_resistance'] - current_price) / current_price
+            
+            # Define zone threshold (1% of price)
+            zone_threshold = 0.01
+            
+            # Determine if price is in a zone
+            zone_state['in_support_zone'] = support_distance <= zone_threshold
+            zone_state['in_resistance_zone'] = resistance_distance <= zone_threshold
+            
+            # Calculate zone strength based on proximity and historical significance
+            if zone_state['in_support_zone']:
+                zone_state['zone_strength'] = 1 - (support_distance / zone_threshold)
+            elif zone_state['in_resistance_zone']:
+                zone_state['zone_strength'] = 1 - (resistance_distance / zone_threshold)
+            else:
+                zone_state['zone_strength'] = 0.0
+            
+            # Store available zones
+            zone_state['support_zones'] = sorted(support_zones)
+            zone_state['resistance_zones'] = sorted(resistance_zones)
+            
+            return zone_state
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing zone state: {str(e)}\nZones data: {zones}")
+            # Return safe default state
+            return {
+                'current_price': float(market_data['close'].iloc[-1]) if 'close' in market_data.columns else 0.0,
+                'nearest_support': float(market_data['close'].iloc[-1] * 0.9) if 'close' in market_data.columns else 0.0,
+                'nearest_resistance': float(market_data['close'].iloc[-1] * 1.1) if 'close' in market_data.columns else 0.0,
+                'zone_strength': 0.0,
+                'in_support_zone': False,
+                'in_resistance_zone': False,
+                'support_zones': [],
+                'resistance_zones': []
+            }
 
+    def _record_state(self):
+        """Record current session state with safe zone handling"""
+        try:
+            state = {
+                'interval': self.current_interval,
+                'psychological_state': self.psychological_state.copy(),
+                'technical_state': self.technical_state.copy(),
+                'zone_state': {
+                    'current_price': self.zone_state.get('current_price', 0.0),
+                    'nearest_support': self.zone_state.get('nearest_support', 0.0),
+                    'nearest_resistance': self.zone_state.get('nearest_resistance', 0.0),
+                    'zone_strength': self.zone_state.get('zone_strength', 0.0),
+                    'in_support_zone': self.zone_state.get('in_support_zone', False),
+                    'in_resistance_zone': self.zone_state.get('in_resistance_zone', False)
+                },
+                'balance': self.balance,
+                'has_position': self.position is not None
+            }
+            self.state_history.append(state)
+            
+        except Exception as e:
+            self.logger.error(f"Error recording state: {str(e)}")
+            # Record minimal state if error occurs
+            self.state_history.append({
+                'interval': self.current_interval,
+                'balance': self.balance,
+                'has_position': self.position is not None
+            })

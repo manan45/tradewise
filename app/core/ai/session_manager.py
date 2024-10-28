@@ -16,7 +16,8 @@ class SessionManager:
     
     def __init__(self, max_sessions: int = 10, log_dir: str = "logs/"):
         self.max_sessions = max_sessions
-        self.sessions = []
+        self.sessions = []  # List of SessionStats objects
+        self.session_data = {}  # Dictionary to store additional session data
         self.learned_patterns = {
             'psychological': {},
             'technical': {},
@@ -35,28 +36,49 @@ class SessionManager:
         # Initialize enhanced logger
         self.logger = logging.getLogger(__name__)
         self.session_logger = EnhancedTrainingLogger(log_dir)
+        
+        # Initialize session storage
+        self.active_sessions = {}  # Store active TradingSession objects
+        self.archived_sessions = {}  # Store archived session data
 
     def create_new_session(self, 
                           market_data: pd.DataFrame, 
                           initial_conditions: Dict) -> TradingSession:
         """Create and initialize a new trading session"""
-        # Apply learned patterns to initial conditions
-        adjusted_conditions = self._apply_learned_patterns(initial_conditions)
-        
-        # Create new session
-        session = TradingSession()
-        session.initialize_session(
-            initial_psychology=adjusted_conditions['psychology'],  # Changed from psychology to initial_psychology
-            market_data=market_data,
-            zones=adjusted_conditions['zones']
-        )
-        
-        # Add to sessions list
-        self.sessions.append(session)
-        if len(self.sessions) > self.max_sessions:
-            self._archive_oldest_session()
-        
-        return session
+        try:
+            # Apply learned patterns to initial conditions
+            adjusted_conditions = self._apply_learned_patterns(initial_conditions)
+            
+            # Create new session
+            session = TradingSession()
+            session.initialize_session(
+                initial_psychology=adjusted_conditions['psychology'],
+                market_data=market_data,
+                zones=adjusted_conditions['zones']
+            )
+            
+            # Generate session ID
+            session_id = f"session_{datetime.now().timestamp()}"
+            
+            # Store active session
+            self.active_sessions[session_id] = {
+                'session': session,
+                'start_time': datetime.now(),
+                'market_data': market_data,
+                'conditions': adjusted_conditions,
+                'metrics': {},
+                'extended_metrics': {}
+            }
+            
+            # Maintain session limit
+            if len(self.active_sessions) > self.max_sessions:
+                self._archive_oldest_session()
+            
+            return session
+            
+        except Exception as e:
+            self.logger.error(f"Error creating new session: {str(e)}")
+            raise
     
     def _apply_learned_patterns(self, conditions: Dict) -> Dict:
         """Apply learned patterns to new session conditions"""
@@ -442,11 +464,11 @@ class SessionManager:
     def save_session_stats(self, session_stats: SessionStats) -> None:
         """Save session statistics and maintain session limit"""
         try:
-            # Convert session stats to dictionary
+            # Convert session stats to dictionary for storage
             stats_dict = {
                 'session_id': session_stats.session_id,
-                'start_time': session_stats.start_time.isoformat(),
-                'end_time': session_stats.end_time.isoformat(),
+                'start_time': session_stats.start_time,
+                'end_time': session_stats.end_time,
                 'total_trades': session_stats.total_trades,
                 'winning_trades': session_stats.winning_trades,
                 'losing_trades': session_stats.losing_trades,
@@ -458,13 +480,20 @@ class SessionManager:
                 'technical_state': session_stats.technical_state
             }
             
-            # Add session to list
+            # Store in session data
+            self.session_data[session_stats.session_id] = {
+                'stats': stats_dict,
+                'extended_metrics': {},
+                'timestamp': datetime.now()
+            }
+            
+            # Add to sessions list
             self.sessions.append(stats_dict)
             
             # Maintain maximum sessions limit
             if len(self.sessions) > self.max_sessions:
                 self._remove_worst_performing_session()
-                
+            
             # Update performance metrics
             self._update_performance_metrics()
             
@@ -485,6 +514,60 @@ class SessionManager:
         except Exception as e:
             self.logger.error(f"Error saving session stats: {str(e)}")
             raise
+
+    def get_session_data(self, session_id: str) -> Optional[Dict]:
+        """Get all data for a specific session"""
+        try:
+            # Check active sessions
+            if session_id in self.active_sessions:
+                return self.active_sessions[session_id]
+            # Check archived sessions
+            elif session_id in self.archived_sessions:
+                return self.archived_sessions[session_id]
+            # Check session data
+            elif session_id in self.session_data:
+                return self.session_data[session_id]
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error getting session data: {str(e)}")
+            return None
+
+    def update_session_metrics(self, session_id: str, metrics: Dict) -> None:
+        """Update metrics for a specific session"""
+        try:
+            if session_id in self.active_sessions:
+                self.active_sessions[session_id]['metrics'].update(metrics)
+            elif session_id in self.archived_sessions:
+                self.archived_sessions[session_id]['metrics'].update(metrics)
+            elif session_id in self.session_data:
+                if 'metrics' not in self.session_data[session_id]:
+                    self.session_data[session_id]['metrics'] = {}
+                self.session_data[session_id]['metrics'].update(metrics)
+                
+        except Exception as e:
+            self.logger.error(f"Error updating session metrics: {str(e)}")
+
+    def _archive_oldest_session(self):
+        """Archive the oldest active session"""
+        try:
+            if not self.active_sessions:
+                return
+                
+            # Find oldest session
+            oldest_id = min(
+                self.active_sessions.keys(),
+                key=lambda k: self.active_sessions[k]['start_time']
+            )
+            
+            # Move to archived sessions
+            session_data = self.active_sessions.pop(oldest_id)
+            self.archived_sessions[oldest_id] = session_data
+            
+            self.logger.info(f"Archived session {oldest_id}")
+            
+        except Exception as e:
+            self.logger.error(f"Error archiving oldest session: {str(e)}")
 
     def _remove_worst_performing_session(self):
         """Remove worst performing session based on combined metric"""
@@ -594,9 +677,24 @@ class SessionManager:
             self.logger.error(f"Error getting performance summary: {str(e)}")
             return {}
 
-
-
-
-
-
-
+    def store_extended_metrics(self, session_id: str, extended_metrics: Dict) -> None:
+        """Store extended metrics for a session."""
+        try:
+            # Check active sessions first
+            if session_id in self.active_sessions:
+                self.active_sessions[session_id]['extended_metrics'] = extended_metrics
+                self.logger.debug(f"Stored extended metrics for active session {session_id}")
+            # Check archived sessions
+            elif session_id in self.archived_sessions:
+                self.archived_sessions[session_id]['extended_metrics'] = extended_metrics
+                self.logger.debug(f"Stored extended metrics for archived session {session_id}")
+            else:
+                # Create new entry in session_data if session not found
+                self.session_data[session_id] = {
+                    'extended_metrics': extended_metrics,
+                    'timestamp': datetime.now()
+                }
+                self.logger.debug(f"Created new entry for session {session_id} metrics")
+                
+        except Exception as e:
+            self.logger.error(f"Error storing extended metrics for session {session_id}: {str(e)}")

@@ -86,7 +86,7 @@ class TrainingService:
             # Volatility and Trend
             df['volatility'] = df['close'].rolling(window=20).std() / df['close'].rolling(window=20).mean()
             df['trend_strength'] = abs(df['sma_20'] - df['sma_50']) / df['sma_50']
-            df['price_momentum'] = df['close'].pct_change(periods=10)
+            df['price_momentum'] = df['close'].fillna(method='ffill').pct_change(periods=10)
             
             # ATR
             high_low = df['high'] - df['low']
@@ -97,7 +97,7 @@ class TrainingService:
             df['atr'] = true_range.rolling(window=14).mean()
             
             # Forward fill NaN values
-            df = df.fillna(method='ffill').fillna(method='bfill')
+            df = df.ffill().bfill()
             
             return df
             
