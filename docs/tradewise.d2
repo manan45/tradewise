@@ -1,0 +1,59 @@
+// Define external components and core system
+external: "External Data API"
+
+postgres: "Postgres" {
+  shape: cylinder
+  icon: https://icons.terrastruct.com/dev%2Fpostgresql.svg
+  icon.near: bottom-center
+}
+
+trainer: "Model Trainer" {
+  ModelTraining: "Model Training" {
+    DataSplitting: "Data Splitting"
+    TrainingSet: "Training Set"
+    EvaluationSet: "Evaluation Set"
+  }
+
+  PredictionGeneration: "Prediction Generation"
+  AccuracyEvaluation: "Accuracy Evaluation"
+}
+
+model: "Tradewise Model" {
+  TradewiseAI: "TradewiseAI Core" {
+    TradingPsychology: "Trading Psychology"
+    ZoneAnalysis: "Zone Analysis"
+    TechnicalAnalysis: "Technical Analysis"
+  }
+
+  DataProcessing: "Data Processing" {
+    TimeSeriesData: "Time Series Data"
+    MarketData: "Market Data"
+    TradingSuggestions: "Trading Suggestions"
+  }
+
+  ModelLogic: "Model Logic" {
+    Forecasting: "Forecasting"
+    PredictionAccuracy: "Prediction Accuracy"
+    PerformanceMetrics: "Performance Metrics"
+  }
+
+  SessionManagement: "Session Management" {
+    Performance: "Performance Tracking"
+    Optimization: "Model Optimization"
+    Reinforcement: "Model Reinforcement"
+  }
+}
+
+// Define core relationships
+external -> trainer.ModelTraining: "Raw Data"
+trainer.ModelTraining -> trainer.PredictionGeneration
+trainer.PredictionGeneration -> trainer.AccuracyEvaluation
+trainer.AccuracyEvaluation -> model.TradewiseAI: "Trained Model"
+
+model.TradewiseAI -> model.DataProcessing: "Process Data"
+model.DataProcessing -> model.ModelLogic: "Generate Predictions"
+model.ModelLogic -> model.SessionManagement: "Track Performance"
+model.SessionManagement -> model.TradewiseAI: "Optimize Model"
+
+model.TradewiseAI -> postgres: "Store Results"
+postgres -> model.DataProcessing: "Historical Data"
