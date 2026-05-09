@@ -1,0 +1,55 @@
+---
+description: TraderWise — what this project is and the highest-level constraints any change must respect. Always loaded.
+alwaysApply: true
+---
+
+# TraderWise project rules
+
+You are working on a US stocks + commodities swing-trading system (no options).
+The repo is currently a stub-complete skeleton; concrete implementations land
+per `STUBS_TODO.md`. Read these documents before any non-trivial change:
+
+- `README.md` — dataflow overview
+- `IMPLEMENTATION_PLAN.md` — pivot decisions and gap list
+- `BACKTESTING.md` — engine + labels + CV
+- `VALIDATION.md` — validation pyramid + dashboard pages
+- `STUBS_TODO.md` — per-function acceptance criteria
+
+## Non-negotiables
+
+1. **Hexagonal boundary.** Domain code (`app/core/**`) imports only from
+   `app/core/ports/**`. Concrete adapters live in `app/connectors/**` or
+   `app/services/**`. Domain code never imports `redis`, `aio_pika`, `polygon`,
+   `anthropic`, etc. directly — only via Protocols.
+2. **No-math LLM.** Numbers in LLM responses must originate from a tool's
+   structured output. `services/llm/guards.py:enforce_no_math` enforces this.
+3. **Point-in-time correctness.** Reading past data MUST go through
+   `app/core/ai/features/asof.py:asof_join` or `asof_lookup`. Never do
+   `df[df.ts < now]` in feature code.
+4. **Parity rule.** `ScenarioManager`, `RiskGateway`, models and features run
+   identically in live, paper and backtest. Only adapters differ. If a code
+   path branches on `mode`, it does not belong in `app/core/`.
+5. **Single risk chokepoint.** Every order goes through `RiskGateway.evaluate`.
+   No exceptions, no "just for testing" bypass.
+6. **Bus topics live in one place.** `app/services/messaging/topics.py`. Never
+   publish or subscribe to a literal string topic.
+7. **Determinism in backtest.** `BacktestEngine.run` must be byte-identical
+   across two runs of the same config. Seed all RNGs from `config.seed`. No
+   wall-clock calls inside the loop.
+8. **Walk-forward CV only.** Random k-fold leaks. Use `WalkForwardSplit`,
+   `PurgedKFold`, or `CombinatorialPurgedKFold` from `app/core/ai/training/splitters.py`.
+9. **Calibrated probabilities.** Model probabilities are unusable without
+   isotonic calibration. Wrap every classifier output with `IsotonicCalibrator`
+   before sizing.
+10. **Kelly cap = 1%.** Fractional Kelly (0.25× full) and absolute cap of 1% of
+    equity per trade. See `app/core/ai/risk/sizing.py`.
+
+## Implicit "do not"
+
+- Do not introduce options, Greeks, IV surfaces — pivot is cash + futures only.
+- Do not introduce Kafka — RabbitMQ is the bus.
+- Do not bring back Dhan / Indian markets — pivot is US.
+- Do not use `pandas` in new feature/model code — `polars` for tabular,
+  `numpy` for numeric arrays.
+- Do not add `raise NotImplementedError` to a function that already has an
+  implementation — implement, don't regress.

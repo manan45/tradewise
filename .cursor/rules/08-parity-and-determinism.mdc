@@ -1,0 +1,34 @@
+---
+description: The backtest engine and the live worker share the same domain code. Branching on mode in domain code is a bug.
+globs: app/backtest/**/*.py, app/core/ai/**/*.py, app/services/**/*.py
+---
+
+# Parity + determinism
+
+We trust backtest results only when the backtest's code path is identical to
+live's code path. The only difference is the adapters in
+`app/core/di/container.py:Container.build(mode)`.
+
+## Rules
+
+1. **No `mode == "backtest"` branches in `app/core/ai/**` or `app/services/**`.**
+   If you need divergent behaviour, do it via different adapter
+   implementations.
+2. `BacktestEngine.run(config)` must be deterministic:
+   - `random.seed(config.seed)` and `np.random.seed(config.seed)` at start.
+   - No `time.time()`, `datetime.now()`, `uuid.uuid4()` inside the loop. UUIDs
+     come from a seeded `Random` instance; timestamps come from the bar.
+3. `SimBroker` and the in-process bus must preserve insertion order across
+   runs.
+4. Two runs of the same config must produce byte-identical
+   `BacktestResult.trades` and equity curve.
+5. When a fix to domain code changes backtest output, that's a notable event:
+   a regression suite captures the equity curve hash for each scenario; bumps
+   require a written changelog entry.
+
+## Smells to reject
+
+- `if mode == "backtest"` inside a feature, model, scenario, risk gateway, or
+  publisher
+- A backtest that uses `datetime.now()` to stamp orders
+- A scenario with non-deterministic ordering (e.g. iterating a `set`)

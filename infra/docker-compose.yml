@@ -1,6 +1,109 @@
-version: '3.8'
+# TraderWise local stack.
+# Per IMPLEMENTATION_PLAN.md §3.1 (D1-D3) + §3.10 Op4.
+# Memory caps tuned for MacBook M3 Pro 18GB (LOCAL_DEV.md §4).
+# Bus standardized on RabbitMQ; Kafka/Zookeeper removed.
 
 services:
+
+  # ---------- Storage ----------
+  db:
+    image: timescale/timescaledb-ha:pg16
+    hostname: postgres-db
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: "${DB_USER:-traderwise}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:-traderwise}"
+      POSTGRES_DB: "${DB_NAME:-traderwise}"
+    volumes:
+      - postgres_data:/home/postgres/pgdata/data
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+    networks: [app-network]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-traderwise}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  redis:
+    image: redis:7-alpine
+    hostname: redis
+    ports: ["6379:6379"]
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    networks: [app-network]
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    hostname: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [app-network]
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USER:-traderwise}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:-traderwise}"
+    networks: [app-network]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ---------- Observability ----------
+  prometheus:
+    image: prom/prometheus:latest
+    hostname: prometheus
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [app-network]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    hostname: grafana
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks: [app-network]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ---------- Application ----------
   api:
     build:
       context: ..
@@ -8,89 +111,22 @@ services:
     ports:
       - "${API_PORT:-8000}:${API_PORT:-8000}"
     depends_on:
-      - db
-      - kafka
-    env_file:
-      - ../.env
-    networks:
-      - app-network
-
-  db:
-    image: postgres:13
-    hostname: postgres-db
-    ports:
-      - "${DB_PORT:-5432}:5432"
-    environment:
-      POSTGRES_USER: "${DB_USER:-postgres}"
-      POSTGRES_PASSWORD: "${DB_PASSWORD:-password}"
-      POSTGRES_DB: "${DB_NAME:-stockdb}"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - app-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  kafka:
-    image: confluentinc/cp-kafka:latest
-    depends_on:
-      - zookeeper
-    ports:
-      - 29092:29092
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    networks:
-      - app-network
-
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - 22181:2181
-    networks:
-      - app-network
-
-  data_service:
-    build:
-      context: ..
-      dockerfile: infra/docker/Dockerfile.data_service
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file:
-      - ../.env
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+      rabbitmq: { condition: service_started }
+    env_file: [../.env]
     environment:
       - DB_HOST=postgres-db
-    networks:
-      - app-network
-
-  training_service:
-    build:
-      context: ..
-      dockerfile: infra/docker/Dockerfile.training_service
-    depends_on:
-      - db
-      - api
-    env_file:
-      - ../.env
-    environment:
-      - DB_HOST=postgres-db
-      - API_HOST=api
-    networks:
-      - app-network
+      - REDIS_HOST=redis
+      - RABBITMQ_HOST=rabbitmq
+      - QDRANT_HOST=qdrant
+    networks: [app-network]
 
 volumes:
   postgres_data:
+  qdrant_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   app-network:

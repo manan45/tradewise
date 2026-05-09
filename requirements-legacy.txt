@@ -1,0 +1,11 @@
+# TraderWise — quarantined legacy deps (NOT installed in prod).
+# Kept only so old experiment notebooks remain runnable in a separate env.
+# Per IMPLEMENTATION_PLAN.md §2.2 + §3.3 M11: TF/Keras/SB3/Gym are the wrong
+# stack for swing tabular finance and have been removed from the production path.
+
+tensorflow==2.16.2
+keras==3.6.0
+stable-baselines3==2.3.2
+gym==0.26.2
+prophet==1.1.6
+flask==3.0.3

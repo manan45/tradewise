@@ -1,0 +1,29 @@
+---
+description: Probabilities must be calibrated; sizing is fractional Kelly capped at 1% of equity.
+globs: app/core/ai/models/**/*.py, app/core/ai/risk/**/*.py, app/core/ai/training/**/*.py
+---
+
+# Calibration + Kelly sizing
+
+A LightGBM `predict_proba` is not a calibrated probability — it's a score.
+Sizing on uncalibrated scores blows up.
+
+## Rules
+
+1. Every classifier output that feeds into sizing or risk MUST pass through
+   `IsotonicCalibrator.transform` first.
+2. `kelly_fraction(p_win, win_loss_ratio)` returns 0 when negative. We never
+   take negative-edge trades.
+3. Position sizing always: `kelly * 0.25` (fractional Kelly) AND capped at 1%
+   of equity per trade. `position_size_shares` enforces both.
+4. The calibrator is fit on the validation fold of walk-forward CV, never on
+   training data.
+5. If `expected positive trades per year × calibrated p_win × win_loss_ratio`
+   < transaction costs, the strategy fails — reject it before backtesting at
+   higher tiers.
+
+## Smells to reject
+
+- Direct use of `model.predict_proba(X)` to size positions
+- Raising the Kelly fraction above 0.25 "to make it worth running"
+- Removing the 1% cap to "test bigger sizes"

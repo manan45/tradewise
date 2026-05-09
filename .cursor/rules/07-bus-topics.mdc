@@ -1,0 +1,33 @@
+---
+description: All RabbitMQ topics live in one constants module. Literal strings on the bus are forbidden.
+globs: app/services/messaging/**/*.py, app/connectors/rabbitmq_client.py, app/services/**/*.py, app/core/**/*.py
+---
+
+# Bus topics
+
+Every routing key is defined as a constant in
+`app/services/messaging/topics.py`. Publishers and consumers import the
+constant — never a literal string.
+
+## Rules
+
+1. To add a new event type:
+   - Add a `<NAME> = "<dot.path>"` to `topics.py`.
+   - Add a publisher method to `EventPublisher` (publisher.py).
+   - Define the payload pydantic schema (in `services/messaging/schemas.py` if
+     you need to add one).
+2. Topic naming: `<area>.<noun>.<verb>` (e.g. `signals.scenario.opened`,
+   `orders.intent.created`). Lowercase, dot-separated.
+3. Consumers subscribe to a *pattern* (e.g. `signals.*.*`) when they handle a
+   family; otherwise an exact topic.
+4. Headers must include `schema: vN` so consumers can reject incompatible
+   payloads.
+5. The exchange is `traderwise.events` (topic exchange). Don't introduce new
+   exchanges without a written reason.
+
+## Smells to reject
+
+- `bus.publish("signals.opened", …)` — literal string
+- `bus.subscribe("orders.*", …)` outside `services/messaging/`
+- Two consumers both ack-ing the same message body in different ways — pick
+  one canonical schema

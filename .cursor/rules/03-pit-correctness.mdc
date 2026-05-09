@@ -1,0 +1,40 @@
+---
+description: Point-in-time correctness for features and labels. Look-ahead bias is the #1 way backtests lie.
+globs: app/core/ai/features/**/*.py, app/core/ai/training/**/*.py, app/pipelines/**/*.py, app/backtest/**/*.py
+---
+
+# Point-in-time correctness
+
+Look-ahead bias is the most common cause of "great backtest, terrible live".
+We assume the worst: any code that touches past data is suspect until proven
+otherwise.
+
+## Rules
+
+1. The only sanctioned way to attach lagged data to a bar is `asof_join` or
+   `asof_lookup` from `app/core/ai/features/asof.py`. They use backward-only
+   joins.
+2. Every feature has an explicit `version: int`. If you change the body of a
+   feature, bump the version. The `FeatureRegistry` enforces this via
+   `body_hash`.
+3. Pipelines are idempotent: running `pipelines/<x>.py:run(asof=D)` twice for
+   the same `D` must yield the same result. Use `UPSERT` on `(symbol, ts)` or
+   the table's natural key.
+4. Universe membership is point-in-time. `BarReplayer` MUST inner-join against
+   `universe_membership` so a delisted symbol disappears from the replay on
+   its delist date. No survivorship-skewed lists.
+5. Triple-barrier labels carry `t1` (label realisation time). Splitters MUST
+   purge any training row with `t1` inside the test window AND embargo a
+   margin around it.
+6. News + earnings join with a "knowable lag" — assume a 5-minute lag from
+   wire timestamp before any model can see a headline.
+7. Macro series (FRED) have a publication lag — never join on the data's
+   "as_of" date; join on the publication date.
+
+## Smells to reject
+
+- `df[df.ts < ts]` in a feature body — not an asof join
+- A model's training set including its own test fold's labels
+- A backtest using today's S&P 500 constituents to backtest 2015
+- A "simple shift" used as the only protection against look-ahead — also use
+  the asof helper

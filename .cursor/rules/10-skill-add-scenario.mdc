@@ -1,0 +1,36 @@
+---
+description: Recipe for adding a new scenario (named trading setup) to the ScenarioManager.
+---
+
+# Skill: add a scenario
+
+Scenarios are the named building blocks of trades. To add one (e.g.
+"breakout_pullback"):
+
+1. **Module.** Create `app/core/ai/scenarios/<name>.py` modelled on
+   `trend_continuation.py`.
+2. **Class.** Implement the `Scenario` Protocol from `scenarios/base.py`:
+   - `applicable_universe() -> list[str]` — which symbols.
+   - `on_candle(ctx: ScenarioContext) -> ScenarioSignal | None` — emit
+     `OPEN/UPDATE/CLOSE` signals based on `ctx.features` (no math —
+     consume precomputed features).
+3. **Features.** Any new primitive features needed → add to
+   `app/core/ai/features/transforms.py`, register in `features/registry.py`,
+   reference in `feature_sets.py` (or create a new feature_set).
+4. **Wire-up.** Add the new scenario to the list passed to
+   `ScenarioManager(...)` in `app/core/di/container.py`.
+5. **Tests.** Add `tests/core/ai/scenarios/test_<name>.py`:
+   - one test where conditions hold → expect `SignalKind.OPEN` with correct
+     side
+   - one test where they don't → expect `None`
+   - one test that the scenario's behaviour is identical between live and
+     backtest contexts (parity rule)
+6. **Docs.** Append a one-line entry to `STUBS_TODO.md` §5 and to
+   `IMPLEMENTATION_PLAN.md` §1.5.
+
+## Constraints
+
+- Scenarios are deterministic given identical `ctx`.
+- Scenarios cannot place orders directly — they emit signals; the gateway
+  decides.
+- Scenarios should not own probability calibration — that's the model's job.

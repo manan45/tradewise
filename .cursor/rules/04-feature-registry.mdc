@@ -1,0 +1,33 @@
+---
+description: Every feature is registered, versioned, and content-hashed before it can be used in training or live.
+globs: app/core/ai/features/**/*.py, app/core/ai/models/**/*.py
+---
+
+# Feature registry discipline
+
+`app/core/ai/features/registry.py:FeatureRegistry` is the source of truth.
+
+## Rules
+
+1. A feature is a pure function: `(pl.DataFrame) -> pl.Series | pl.DataFrame`.
+   No I/O. No global state. No randomness without an explicit seed parameter.
+2. Register with `(name, version, fn)`. The registry computes a `body_hash`
+   from the function bytecode. If `(name, version)` already exists with a
+   different body_hash, registration raises — bump the version instead of
+   silently mutating.
+3. Models declare their inputs as a list of `(name, version)` tuples (see
+   `app/core/ai/features/feature_sets.py`). Training uses `build_set` to
+   materialise exactly that combination.
+4. Output column names from `build_set` are prefixed `<name>__v<version>__` so
+   the model's training and inference schemas are byte-identical.
+5. Features must NOT call models. Features compute primitives; the model
+   composes them.
+
+## When you add a feature
+
+- Pick a stable name (snake_case, descriptive, no abbreviations the next
+  person won't recognise).
+- Start at `version=1`. If you need to change the math later, register
+  `version=2`; old models keep using `v1`.
+- Add a unit test with synthetic input that pins the expected output of the
+  first 5 rows.

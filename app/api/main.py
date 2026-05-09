@@ -1,26 +1,18 @@
-import os
-from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+"""Operator-facing HTTP surface."""
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
-from typing import List, Optional
-from datetime import datetime
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from app.core.domain.models.trade_suggestion_request import TradeSuggestionRequest
-from app.core.use_cases.trade_suggestions import TradeSuggestionsUseCase
-from app.core.repositories.stock_repository import StockRepository
-from app.core.ai.tradewise_ai import TradewiseAI, SessionStats, PredictionStats
-from app.services.data_service import DataService
+from app.core.di.container import Container, Mode
+from app.core.ai.risk.circuit_breaker import BreakerTrip
 
-load_dotenv()
+app = FastAPI(title="TraderWise Operator API", version="0.1.0")
 
-app = FastAPI(
-    title="Stock Trading API",
-    description="API for stock trading suggestions and real-time data",
-    version="1.0.0",
-)
-
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,103 +21,115 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi(
-        title="Stock Trading API",
-        version="1.0.0",
-        description="API for stock trading suggestions and real-time data",
-        routes=app.routes,
-    )
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
+_container: Container | None = None
+_backtest_runs: dict[str, dict] = {}
 
-app.openapi = custom_openapi
+security = HTTPBasic()
 
-@app.post("/api/tradewise/suggestions")
-async def generate_trade_suggestions(request: TradeSuggestionRequest):
-    """Generate trade suggestions for a symbol"""
+
+def get_container() -> Container:
+    global _container
+    if _container is None:
+        _container = Container.build(Mode.PAPER)
+    return _container
+
+
+def operator_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    from app.config.settings import settings
+    # Simple: any non-empty username works in dev; in prod wire to a secrets store
+    if not credentials.username:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return credentials.username
+
+
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz() -> dict[str, Any]:
+    c = get_container()
+    checks: dict[str, str] = {}
+    ok = True
     try:
-        stock_repository = StockRepository()
-        use_case = TradeSuggestionsUseCase(stock_repository)
-        suggestion = await use_case.generate_suggestion_for_stock(request.symbol)
-        return suggestion
+        await c.cache.get("__ping__")
+        checks["cache"] = "ok"
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating suggestions: {str(e)}")
-
-@app.get("/api/tradewise/suggestions/top/{limit}")
-async def get_top_suggestions(limit: int = 5):
-    """Get top trade suggestions"""
+        checks["cache"] = str(e)
+        ok = False
     try:
-        stock_repository = StockRepository()
-        use_case = TradeSuggestionsUseCase(stock_repository)
-        suggestions = await use_case.get_top_suggestions(limit)
-        return suggestions
+        await c.bus.publish("__ping__", {})
+        checks["bus"] = "ok"
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        checks["bus"] = str(e)
+        ok = False
+    if not ok:
+        raise HTTPException(status_code=503, detail=checks)
+    return {"status": "ok", "checks": checks}
 
-@app.get("/api/tradewise/sessions/{session_id}")
-async def get_session_stats(session_id: Optional[str] = None):
-    """Get trading session statistics"""
-    try:
-        tradewise = TradewiseAI()
-        stats = await tradewise.get_session_stats(session_id)
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/tradewise/predictions/{session_id}")
-async def get_prediction_stats(session_id: Optional[str] = None):
-    """Get prediction statistics"""
-    try:
-        tradewise = TradewiseAI()
-        stats = await tradewise.get_prediction_stats(session_id)
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/metrics")
+async def metrics() -> Response:
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
-@app.get("/api/tradewise/logs")
-async def get_session_logs(
-    session_id: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None
-):
-    """Get trading session logs"""
-    try:
-        tradewise = TradewiseAI()
-        logs = await tradewise.get_session_logs(session_id, start_date, end_date)
-        return logs
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/tradewise/analysis/{symbol}")
-async def get_market_analysis(symbol: str):
-    """Get comprehensive market analysis for a symbol"""
-    try:
-        stock_repository = StockRepository()
-        tradewise = TradewiseAI()
-        df = await stock_repository.get_market_data(symbol)
-        analysis = tradewise._analyze_market(df)
-        return analysis
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/sessions")
+async def list_sessions() -> list[dict]:
+    c = get_container()
+    if c.sessions is None:
+        return []
+    sessions = await c.sessions.list_open(symbol=None, scenario=None, mode=None)
+    return [s.__dict__ if hasattr(s, "__dict__") else s for s in sessions]
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data_service = DataService()
-            tradewise_ai = TradewiseAI()
-            latest_data = await data_service.get_latest_stock_data()
-            suggestions = await tradewise_ai.generate_trade_suggestions(latest_data)
-            await websocket.send_json(suggestions[0].dict())
-    except WebSocketDisconnect:
-        logging.info("WebSocket disconnected")
-    except Exception as e:
-        logging.error(f"WebSocket error: {str(e)}")
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host=os.getenv('API_HOST'), port=int(os.getenv('API_PORT')))
+@app.get("/sessions/{session_id}")
+async def get_session(session_id: str) -> dict:
+    c = get_container()
+    if c.sessions is None:
+        raise HTTPException(status_code=404, detail="Sessions not wired")
+    session = await c.sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.__dict__ if hasattr(session, "__dict__") else session
+
+
+@app.post("/system/halt")
+async def halt(reason: str = "manual", operator: str = Depends(operator_auth)) -> dict:
+    c = get_container()
+    if c.risk is None:
+        raise HTTPException(status_code=503, detail="Risk gateway not wired")
+    await c.risk.breaker.trip(BreakerTrip.MANUAL)
+    return {"status": "halted", "reason": reason}
+
+
+@app.post("/system/resume")
+async def resume(operator: str = Depends(operator_auth)) -> dict:
+    c = get_container()
+    if c.risk is None:
+        raise HTTPException(status_code=503, detail="Risk gateway not wired")
+    await c.risk.breaker.reset(operator)
+    return {"status": "resumed", "operator": operator}
+
+
+@app.post("/backtest")
+async def start_backtest(payload: dict) -> dict:
+    run_id = str(uuid.uuid4())
+    _backtest_runs[run_id] = {"status": "queued", "config": payload}
+    if get_container().bus is not None:
+        from app.services.messaging import topics
+        await get_container().bus.publish(
+            topics.AUDIT_EVENT,
+            {"run_id": run_id, "config": payload},
+            headers={"schema": "v1"},
+        )
+    return {"run_id": run_id, "status": "queued"}
+
+
+@app.get("/backtest/{run_id}")
+async def backtest_status(run_id: str) -> dict:
+    run = _backtest_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run

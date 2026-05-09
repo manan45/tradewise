@@ -1,0 +1,31 @@
+---
+description: Hard separation between compute and reason — the LLM narrates, tools compute.
+globs: app/services/llm/**/*.py, app/core/ai/scenarios/**/*.py
+---
+
+# No-math LLM
+
+The LLM (Claude) is a tool-using narrator. It must never produce a number that
+did not come from a tool's structured output.
+
+## Rules
+
+1. Every callable tool returns a pydantic model from `services/llm/schemas.py`.
+2. The orchestrator collects every numeric value from the union of tool outputs
+   into `allowed_numbers: set[float]`.
+3. After the LLM returns a final text response, `guards.enforce_no_math(text,
+   allowed_numbers)` runs. It extracts every numeric token from the text and
+   asserts each appears in `allowed_numbers`. Reject and retry if not.
+4. The LLM cannot compute Sharpe, p-values, position sizes, prices, or
+   probabilities. If it needs one, add a tool.
+5. Tool result objects must NEVER be summarised into prose by the orchestrator
+   before passing to the LLM — pass the structured object verbatim.
+
+## When you write a new tool
+
+- Define input + output pydantic models in `services/llm/schemas.py`.
+- Implement `_<tool_name>(payload: dict) -> dict` in `services/llm/tools.py`.
+- Register it in `default_toolset()`.
+- Ensure the output schema's numeric fields are populated from real
+  computations elsewhere in the codebase (e.g. risk gateway, scenario manager,
+  session repository) — never hand-rolled in the tool body.

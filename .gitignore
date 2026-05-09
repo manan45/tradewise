@@ -1,58 +1,50 @@
-.aider*
-.env
-.venv
-# Temporary files
-*.tmp
-*.swp
-*.swo
-
-# Compiled source
-*.class
-*.o
-*.so
-
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
+*.so
 
-# Virtual environments
+# Virtual envs
 venv/
+.venv/
 env/
 
+# Editor / IDE
 .aider*
+.idea/
+.vscode/
+*.swp
+*.swo
+*.tmp
+
+# OS
+.DS_Store
+
+# Secrets / local config
 .env
+.env.*
+!.env.example
 
+# Build / dist
+build/
+dist/
+*.egg-info/
 
-experiments/
-
-# Logs
+# Logs + runtime artifacts
+logs/
 *.log
 
-# Docker
-*.dockerignore
+# Local data + model artifacts
+data/
+artifacts/
+sessions/
 
-# Kubernetes
-*.yaml
-*.yml
+# Notebooks scratch
+experiments/
 
-# Terraform
+# Terraform state
 *.tfstate
 *.tfstate.*
 
 # Helm
 charts/
-
-# Node.js
-node_modules/
-
-# Java
-*.jar
-*.war
-*.ear
-
-# Build directories
-build/
-dist/
-
-logs/

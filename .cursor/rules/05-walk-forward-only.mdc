@@ -1,0 +1,29 @@
+---
+description: CV must respect time. Random k-fold is forbidden in this project.
+globs: app/core/ai/training/**/*.py, app/backtest/**/*.py
+---
+
+# Walk-forward CV only
+
+Time-series labels are autocorrelated. Random splits leak future into past.
+
+## Rules
+
+1. Use one of `WalkForwardSplit`, `PurgedKFold`, or `CombinatorialPurgedKFold`
+   from `app/core/ai/training/splitters.py`. No `sklearn.model_selection.KFold`
+   on time-series data.
+2. `PurgedKFold` and `CombinatorialPurgedKFold` need the `t1` series (label
+   realisation timestamps from `triple_barrier`). Pass it.
+3. Embargo (`embargo_pct`) is mandatory — default 0.01. Setting it to 0
+   defeats the purpose.
+4. Walk-forward refits are mandatory for any model that goes to paper or live.
+   No "trained once on 2010-2020, run on 2024" deployments.
+5. When sweeping hyperparameters, multiple-testing inflation is real. Apply
+   `deflated_sharpe(...)` from `app/core/ai/training/metrics.py` and report
+   the deflated number.
+
+## Smells to reject
+
+- `train_test_split(X, y)` on bars
+- A CV that returns higher-Sharpe folds without an embargo
+- Backtests that report only the un-deflated Sharpe of the best sweep

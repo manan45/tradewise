@@ -1,0 +1,28 @@
+---
+description: Recipe for adding a new feature to the registry.
+---
+
+# Skill: add a feature
+
+1. **Function.** Add a pure function to
+   `app/core/ai/features/transforms.py`:
+   - Input: a `pl.Series` or `pl.DataFrame`.
+   - Output: same length; the first `window-1` rows NaN where applicable.
+   - No I/O; no global state; no unseeded randomness.
+2. **Register.** In `app/core/ai/features/registry.py` (or wherever the
+   project bootstraps the registry — currently `feature_sets.py` is the seam):
+   ```python
+   registry.register(FeatureSpec(name="<name>", version=1, fn=<fn>))
+   ```
+3. **Use it.** Add `("<name>", 1)` to the relevant `FEATURE_SET` constant in
+   `feature_sets.py` (A_VOL_REGIME, B_PRIME_RV_EXPANSION, …).
+4. **Test.** `tests/core/ai/features/test_<name>.py` — synthetic inputs,
+   pinned expected outputs for the first 5 rows.
+5. **Bumping.** If you change the math of an existing feature, register
+   `version=2` instead of mutating `version=1`. Old artifacts must remain
+   reproducible.
+
+## Naming
+
+snake_case, descriptive, no cryptic abbreviations. `realized_vol_21` not
+`rv21`.

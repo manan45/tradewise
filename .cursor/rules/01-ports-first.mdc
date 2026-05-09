@@ -1,0 +1,31 @@
+---
+description: Hexagonal architecture rules — when adding integrations, define the port first, then the adapter.
+globs: app/core/**/*.py, app/connectors/**/*.py, app/services/**/*.py
+---
+
+# Ports-first
+
+When you need a new external capability:
+
+1. Define / extend a Protocol in `app/core/ports/<name>.py`. The Protocol is
+   the contract; it owns the dataclasses (Bar, Quote, Order, Fill, …) used at
+   the boundary.
+2. Add a stub adapter in `app/connectors/<vendor>_client.py` (3rd-party SaaS)
+   or `app/services/<area>/<vendor>.py` (local service). Adapter implements
+   only the Protocol — no extra public methods.
+3. Wire the adapter into `app/core/di/container.py:Container.build`.
+4. Domain code (`app/core/ai/**`, `app/core/ai/risk/**`,
+   `app/core/ai/scenarios/**`) imports the **Protocol**, never the adapter.
+
+## Why
+
+Lets us swap Polygon ↔ Alpaca ↔ ParquetMarketData in backtest without touching
+domain code. Also forces us to model what we actually need from a vendor before
+writing code that depends on a vendor's quirks.
+
+## Smells to reject
+
+- A `from polygon import …` inside `app/core/`
+- A new method on `PolygonMarketData` that isn't on `MarketDataProvider`
+- A direct `redis.asyncio` call in a feature/model module (use `KVCache`)
+- Any `if isinstance(broker, AlpacaBroker)` in domain code

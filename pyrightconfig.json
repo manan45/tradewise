@@ -1,0 +1,10 @@
+{
+  "include": ["app", "migrations"],
+  "exclude": ["**/__pycache__", "**/.pytest_cache"],
+  "venvPath": ".",
+  "venv": "venv",
+  "pythonVersion": "3.11",
+  "reportUnusedParameter": false,
+  "reportMissingTypeStubs": false,
+  "reportPrivateImportUsage": false
+}

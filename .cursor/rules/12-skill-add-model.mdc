@@ -1,0 +1,32 @@
+---
+description: Recipe for adding a new model implementing the BaseModel protocol.
+---
+
+# Skill: add a model
+
+1. **Module.** `app/core/ai/models/<name>.py`. Implement the `BaseModel`
+   Protocol from `models/base.py`: `fit`, `predict_proba`, `save`, `load`.
+2. **Backbone.** LightGBM (`lgb.LGBMClassifier` / `LGBMRanker` /
+   `LGBMRegressor`) unless you have a specific reason. Keep the surface tiny:
+   no custom training loops, no tf/torch in this repo.
+3. **Inputs.** Use `FeatureRegistry.build_set(<feature_set>, df)` to obtain
+   X. Don't read DataFrames manually.
+4. **Calibration.** A model's raw `predict_proba` is NOT used for sizing.
+   Wrap with `IsotonicCalibrator` after fitting on the validation fold.
+5. **Artifact.** `save()` returns a `ModelArtifact` with at minimum:
+   `path, model_type, feature_hash, fit_metadata`. `feature_hash` is the
+   sha256 of the sorted `(name, version)` tuples used.
+6. **Training harness.** New models are trained via
+   `app/core/ai/training/harness.py:TrainingHarness.run` with a walk-forward
+   or purged k-fold splitter — never bare sklearn loops.
+7. **Test.** Synthetic-data smoke test that fits in <1s and asserts
+   `predict_proba` shape and value range.
+8. **Wire-up.** Surface in `app/core/ai/models/__init__.py` `__all__` and
+   reference from the scenario(s) that use it.
+
+## Constraints
+
+- Models live in domain code → only `numpy` and `polars`. No raw `pandas`.
+- Don't introduce hyperparameters that are not exposed via the `params: dict`
+  constructor argument.
+- No CV inside `fit` — that's the harness's job.

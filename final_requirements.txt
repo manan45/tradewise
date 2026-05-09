@@ -1,0 +1,1369 @@
+# Gold (GLD) Options Systematic Trading System
+## Architecture, Models, and Build Plan — v1.6
+
+---
+
+## 0. Calibration: What "Good" Actually Looks Like
+
+Before any architecture decisions, lock in realistic targets. Optimizing toward 80% directional accuracy will produce overfit backtests that blow up in live trading. The real benchmarks for a well-built systematic gold options strategy:
+
+| Metric | Realistic target | Elite target |
+|---|---|---|
+| Directional win rate | 50–55% | 55–58% |
+| Credit spread win rate (selling premium) | 60–70% | 70–75% |
+| Long-vol setup win rate | 35–45% | 45–50% |
+| Reward-to-risk per trade | 1.5–2.0 : 1 | 2.0–3.0 : 1 |
+| Sharpe (after costs) | 1.0–1.4 | 1.5–2.0 |
+| Max drawdown | 15–20% | 10–15% |
+| Annualized return (capital-at-risk basis) | 15–25% | 25–40% |
+
+A 53% win rate at 2:1 R:R compounds aggressively when sized correctly. That is the actual goal — positive expectancy with disciplined sizing, not high accuracy.
+
+If a backtest shows >65% win rate or <8% MDD over 5+ years on directional strategies, assume overfitting until proven otherwise.
+
+---
+
+## 1. The Core Reframe: Predict Conditions, Not Prices
+
+The reason most retail "AI trading bots" fail is they try to predict the next price. That signal is near-zero. What is genuinely predictable in gold:
+
+| Predictable signal | Edge strength | Tradeable as |
+|---|---|---|
+| Volatility regime (high/low IV cluster) | Strong | Sell or buy premium |
+| IV vs realized vol gap | Moderate | Delta-hedged vol arbitrage |
+| GVZ term structure flips | Moderate | Calendars, backspreads |
+| Mean reversion in vol after spikes | Strong (short horizon) | Short vol post-panic |
+| Direction conditional on trending regime | Moderate | Directional spreads |
+| Direction unconditional | Near-zero | **Don't trade this** |
+
+Forecasting models output **probabilities of conditions**. The LLM orchestrator combines those with news, knowledge base context, and risk constraints to choose **structure and sizing**.
+
+---
+
+## 2. System Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                            DATA LAYER                                  │
+│                                                                        │
+│  HISTORICAL                              REAL-TIME (intraday)          │
+│  Price (GLD, /GC, options)               WebSocket: GLD, GVZ           │
+│  Macro (real yields, DXY, BE)            Options chain top-of-book     │
+│  Vol (GVZ, IV surface)                   News feed (event-driven)      │
+│  Positioning (CFTC COT)                                                │
+│  News + text corpus                                                    │
+└──────────┬───────────────────────────────────────────────┬─────────────┘
+           │                                               │
+           ▼                                               ▼
+  ┌───────────────────────────────────┐         ┌─────────────────────┐
+  │ NUMERICAL    NEWS/SENT.   RAG     │         │ SCENARIO MANAGER    │
+  │ MODELS       FinBERT      Qdrant  │         │ (intraday layer)    │
+  │                                   │         │                     │
+  │ Model A: Vol regime               │         │ State machines      │
+  │ Model B: IV mispricing            │◀────────┤ per scenario        │
+  │ Model C: Regime-cond. dir.        │         │                     │
+  │                                   │         │ 5-min candle tick   │
+  │ Sentiment scores                  │         │ Numerical rules     │
+  │                                   │         │ for state updates   │
+  │ Books, transcripts, journal       │         │                     │
+  └───────────┬───────────────────────┘         │ Lifecycle events    │
+              │                                 │ → orchestrator      │
+              │           ┌────────────────────▶│   on transitions    │
+              │           │                     │   only              │
+              ▼           │                     └─────────┬───────────┘
+  ┌───────────────────────┴───────┐                       │
+  │   LLM ORCHESTRATOR AGENT      │◀──────────────────────┘
+  │   (Claude Sonnet / Qwen 72B)  │   scenario_born / confirmed / dead
+  │                               │
+  │  Triggers:                    │
+  │  - Daily cron at open         │
+  │  - Scenario lifecycle events  │
+  │  - Macro event triggers       │
+  │                               │
+  │  Outputs structured trade plan│
+  └─────────────┬─────────────────┘
+                │
+                ▼
+  ┌───────────────────────────────┐
+  │  RISK / SIZING LAYER          │
+  │  RULE-BASED — NO LLM OVERRIDE │
+  │                               │
+  │  Position sizing, Greeks      │
+  │  limits, drawdown circuit     │
+  │  breakers, event blackouts,   │
+  │  intraday event rate limits   │
+  └─────────────┬─────────────────┘
+                │
+                ▼
+        Execution (Alpaca / IBKR)
+```
+
+**Inviolable rules:**
+1. The LLM never sets sizing, never overrides risk limits, and never executes without rule-layer validation.
+2. The scenario manager **never calls the LLM per candle**. Numerical rules update state; LLM is invoked only at lifecycle transitions.
+
+---
+
+## 3. Data Layer
+
+### 3.1 Market data — historical and real-time
+- **Historical bars**: GLD 15-min and daily; /GC futures (Databento via CME)
+- **Real-time data, two-speed architecture**:
+    - **Slow path** (analysis): poll BBO every 1–5 min; aggregate to 15-min bars for the scenario manager
+    - **Fast path** (execution): real-time WebSocket only at the moment of order placement, to ensure fills price against current mid
+    - This keeps cost low while preserving execution quality
+- **Provider**: Polygon, Databento, or IBKR. WebSocket is optional for slow path.
+- **GLD options chain** with full Greeks, OI, volume, bid/ask: CBOE DataShop or ORATS (~$100–300/month — non-negotiable for serious backtesting)
+- **GVZ** (CBOE Gold Volatility Index) — daily and intraday
+- **L2 orderbook** (optional, Tier 2 from §4.7): Polygon, Databento, or CBOE DataShop add-on, $50–300/month. Skip until Tier 1 microstructure features are working.
+
+### 3.2 Macro features (gold-specific drivers)
+- **US 10Y real yield (TIPS)** — single most important macro variable for gold. FRED: `DFII10`
+- **DXY** — strong inverse correlation, especially in risk-off
+- **10Y breakeven inflation rate** — FRED: `T10YIE`
+- **2s10s curve slope**
+- **M2 money supply growth** (monthly)
+- **Central bank gold purchases** — World Gold Council monthly reports
+- **GLD ETF creations/redemptions** — daily flows
+- **VIX** — risk regime proxy
+
+### 3.3 Vol features
+- GVZ level + 21-day percentile/rank
+- GVZ term structure (front month vs 3-month)
+- GLD IV surface: ATM IV, 25-delta call/put skew, 10-delta wings
+- IV vs RV spread (current ATM IV minus 21-day realized vol, annualized)
+
+### 3.4 Positioning
+- **CFTC COT report** (weekly): managed money net long, commercials net short, non-commercial extremes
+- COT positioning at >90th percentile historically a reliable contrarian signal
+
+### 3.5 News and text
+- Real-time news feed (NewsAPI for prototype, Bloomberg/Reuters terminal for production)
+- FOMC statements + minutes (FRED archives)
+- ECB, PBOC gold-relevant releases
+- Geopolitical event detection (separate classifier)
+
+**Storage:** TimescaleDB for time-series. Redis for ephemeral scenario state with auto-expiring keys.
+
+---
+
+## 4. Feature Engineering
+
+Target: 40–60 features. **Use rank/percentile transforms** rather than raw values — far more robust across regimes.
+
+### Trend / momentum
+- Returns over 5, 10, 21, 63 days
+- Distance from 20/50/200 SMA (% terms)
+- ADX-style trend strength
+
+### Mean reversion
+- Z-score of price vs 20-day MA
+- RSI(14) — feature, not a rule
+- Bollinger band position
+
+### Vol features
+- GVZ level + 21-day rank
+- IV-RV spread (annualized)
+- IV term structure slope
+- 21-day realized vol of vol (vol-of-GVZ)
+
+### Macro
+- 10Y real yield level + 21-day change
+- DXY 21-day change + 63-day rank
+- Breakeven inflation 21-day change
+- COT managed money percentile (90-day window)
+
+### Cross-asset
+- Gold/silver ratio
+- Gold/copper ratio
+- Gold vs miners (GDX) divergence
+
+### Event features
+- Days to next FOMC / CPI / NFP
+- Imminence flags (≤48h binary)
+
+### Engineered interactions (only after baseline works)
+- `real_yield_change × vol_regime`
+- `DXY_zscore × COT_extreme`
+
+### 4.7 Orderbook and microstructure features (optional, tiered)
+
+Orderbook data helps **execution more than prediction at swing horizon**. Signals from the L2 book decay in seconds-to-minutes; at 5–30 day horizons their predictive content is small. Where it genuinely pays off is execution quality (saves slippage), risk gating (prevents bad fills on illiquid contracts), and liquidity-aware sizing. Treat it accordingly — as an execution + risk layer, not a prediction layer — and you avoid the most expensive over-engineering trap in retail systematic trading.
+
+Add in three tiers based on cost-vs-value.
+
+**Tier 1 — cheap, high-value, add at the start.** BBO is in any reasonable data feed; engineering effort is minimal.
+
+| Feature | Source | Use |
+|---|---|---|
+| Quoted spread per strike (absolute and % of mid) | BBO from any feed | Execution gate: skip strike if spread > 5% of mid |
+| Top-of-book size on bid and ask | BBO | Sizing limit: don't enter beyond 50% of resting depth |
+| Spread time series (5-min rolling) | Computed from BBO | Flag widening as regime indicator |
+| Volume-weighted mid | BBO + last-trade | Better fill-price estimation than raw mid |
+
+**Tier 2 — medium cost, real value.** Real-time L2 GLD options data: $50–300/month. Engineering: real-time consumer + storage + feature pipeline. Worth adding once Tier 1 is solid and you've validated the system has expectancy without it.
+
+| Feature | Source | Use |
+|---|---|---|
+| Order flow imbalance on GLD underlying (5-min, 30-min) | L2 of GLD or /GC | Modest predictive value; better as scenario confirmation than birth signal |
+| Unusual options activity flags (volume > 5× OI) | CBOE daily UOA reports (free) | Informed flow detection |
+| Dealer gamma exposure (GEX) | Derived from full chain + OI — no L2 needed | High signal — already in §15.7 |
+| Vanna and charm exposures | Derived from chain | Dealer hedging dynamics |
+| Block trade detection (>100 contracts single trade) | Time and sales | Informed flow indicator |
+| Cumulative signed volume on underlying | L2 + trade tape | Trend confirmation |
+
+**Tier 3 — overkill at your horizon.** These are HFT/scalping tools. At swing horizon they generate noise more than signal, and the engineering cost is significant. Skip until you have a proven swing system AND an explicit reason to add intraday execution alpha on top.
+
+- Full L2 book per strike across the chain in real-time
+- Order-by-order microstructure (iceberg detection, hidden order analysis)
+- VPIN (Volume-synchronized Probability of Informed Trading)
+- Sweep detection
+- TPO/Market Profile features
+
+**Integration with scenarios and sessions.**
+
+Tier 1 features should appear in every scenario's `birth_state` (§8.7.2) from day one:
+- Current spread and liquidity score → enables case-based retrieval to distinguish "born in liquid market" from "born in thin market" sessions, which materially affects outcomes
+- Hard liquidity gate → if spread > 5% of mid OR depth < min_size, scenarios cannot reach `confirmed` state, only logged
+
+Tier 2 features become inputs to forecasting models (§5) and orchestrator context.
+
+**The principle, restated:** orderbook is an execution-and-risk layer, not a prediction layer. Treat it that way and you save money plus engineering time. Treat it as a prediction feature and you over-engineer for marginal gain.
+
+---
+
+## 5. Forecasting Models
+
+Three models, each predicting a tradeable target. Three is enough — more typically means overfitting.
+
+### Model A: Vol Regime Classifier
+- **Target**: Will GVZ be in top tercile in 5 trading days?
+- **Algorithm**: LightGBM, multiclass (low/mid/high)
+- **Use**: Net short premium when high regime predicted; net long premium when low predicted
+- **Realistic accuracy**: 60–65% on 3-class
+
+### Model B: IV Mispricing Regression
+- **Target**: Will realized vol over next 21 days exceed current ATM IV by >2 vol points?
+- **Algorithm**: LightGBM, binary, calibrated (isotonic)
+- **Use**: P > 0.6 → long vol; P < 0.4 → short vol
+- **Realistic accuracy**: 55–60%
+
+### Model C: Regime-Conditional Direction
+- **Target**: Will GLD return > 1% over next 5 trading days?
+- **Algorithm**: LightGBM with regime features; or separate models per regime
+- **Use**: Weight heavily only when Model A signals trending regime
+- **Realistic accuracy**: 53–56%
+
+### Training Protocol (non-negotiable)
+- **Walk-forward**: train 2018–2022, validate 2023, test 2024+. Roll quarterly.
+- **Purged k-fold CV**: 5-day gap between train and validation folds
+- **Calibration**: isotonic regression on validation set; verify diagonal calibration curves
+- **Feature stability**: drop features with importance variance >2× the median across folds
+- **No future leakage**: every feature timestamped; signal at `t` uses only `t-1` and earlier
+
+### Optional: Time-Series Transformer
+PatchTST or iTransformer on 60-day sequences — additional input to the LightGBM stack, never standalone. Marginal gain if data <8 years.
+
+---
+
+## 6. News and Sentiment Pipeline
+
+### 6.1 Build the corpus
+- Historical FOMC statements + minutes (FRED, ~25 years)
+- Central bank speeches (BIS)
+- Major gold news (Reuters/Bloomberg historical, NewsAPI archives)
+- Hand-label ~2,000 documents: bullish gold / bearish gold / neutral, with confidence
+
+### 6.2 Fine-tune
+- **Base**: FinBERT (already finance-pretrained) or Qwen 2.5 3B with LoRA
+- **LoRA**: rank 16, alpha 32, dropout 0.1, target attention + MLP layers
+- **Training**: 3 epochs, AdamW, lr 2e-5, batch size 16
+- **Validation**: 20% held-out, expect 75–82% accuracy on 3-class
+
+### 6.3 Live pipeline
+- News → fine-tuned classifier → sentiment score in [-1, +1]
+- Daily aggregation: `sentiment_mean_24h`, `sentiment_volatility_24h`, `event_flag`
+- Feed as features into Models A/B/C
+
+### 6.4 Event detection (separate classifier)
+Flags "gold-relevant macro event in next 48 hours." Output `event_imminence` consumed by risk layer for blackouts.
+
+**Pipeline infra**: News → RabbitMQ → sentiment worker → TimescaleDB → cache invalidation.
+
+---
+
+## 7. Knowledge Base (RAG)
+
+**Advisory context for the LLM orchestrator, not a signal source.** Informs reasoning; does not predict.
+
+### 7.1 Sources
+- **Options theory**: Natenberg, Sinclair (Volatility Trading + Positional Option Trading), Hull
+- **Gold/macro**: Rickards, Maloney, BIS papers, IMF working papers
+- **Trading video transcripts**: Whisper-large-v3, diarized, cleaned
+- **Your trade journal**: every trade with thesis, structure, outcome, lesson
+- **Your written market views**, timestamped
+
+### 7.2 Stack
+- **Embedder**: BGE-large-en-v1.5 or Qwen3-Embedding
+- **Vector DB**: Qdrant
+- **Chunking**: 500-token chunks, 100-token overlap; preserve section/chapter metadata
+- **Metadata filters**: `source_type`, `date`, `topic`, `asset`
+
+### 7.3 Retrieval
+- **Hybrid**: BM25 + dense, RRF-fused
+- **Date filtering** to avoid stale-view contamination
+- **Top-K**: 5–8 chunks, re-ranked by `bge-reranker-base`
+
+### 7.4 Orchestrator consumption
+The agent gets context like:
+> "Natenberg ch. 11 on calendar spreads when term structure is flat-to-inverted; your March 2024 journal entry on getting whipsawed during FOMC week with short calendars; Sinclair on selling vol after panic spikes."
+
+The LLM uses this to **frame and justify** decisions, not generate them. Every trade plan cites which KB chunks influenced it.
+
+---
+
+## 8. LLM Orchestrator Agent
+
+### 8.1 Model choice
+- **Don't fine-tune the orchestrator.** Strong base model with good tool use.
+- **Options**: Claude Sonnet 4.6 (API, best tool use) or self-hosted Qwen 2.5 72B / Llama 3.3 70B with vLLM
+- **Latency**: loose — prioritize reasoning quality
+- **Cost**: ~$0.50–2.00 per decision via API
+
+### 8.2 Trigger sources
+1. **Daily cron** at market open (planning) and close (review)
+2. **Scenario lifecycle events** from the scenario manager (intraday)
+3. **Macro event triggers** (FOMC release, CPI print)
+
+### 8.3 Tool spec
+
+```python
+tools = [
+    get_market_state,           # GLD, GVZ, IV, current regime
+    get_model_predictions,      # Models A/B/C with calibrated probabilities
+    get_sentiment,              # Aggregated sentiment over a window
+    search_knowledge_base,      # RAG retrieval with filters
+    get_active_scenarios,       # Live scenarios from manager
+    get_current_positions,      # Open trades, P&L, portfolio Greeks
+    get_upcoming_events,        # Scheduled macro events in horizon
+    compute_position_size,      # Sizing per risk rules (deterministic)
+    propose_trade,              # Returns validated plan or rejection reason
+]
+```
+
+### 8.4 Decision loop
+1. Triggered event arrives (cron, scenario, macro)
+2. Gather: market state → model predictions → sentiment → active scenarios → RAG context
+3. Generate 1–3 candidate setups with reasoning traces
+4. For each: call `propose_trade` to validate against risk rules
+5. Return structured output with full reasoning trace
+
+### 8.5 Output schema (validated JSON)
+
+```json
+{
+  "decision": "execute | hold | skip",
+  "trigger_source": "scenario_confirmed | daily_open | macro_event",
+  "trigger_id": "scenario_2026-05-07T14:30_vol_expansion_001",
+  "setup_name": "vol_arb_short_premium",
+  "structure": {
+    "type": "iron_condor",
+    "expiry": "2026-06-19",
+    "strikes": {"short_put": 220, "long_put": 215, "short_call": 235, "long_call": 240},
+    "credit_target": 0.85,
+    "max_loss": 415
+  },
+  "size": {"contracts": 3, "capital_at_risk": 1245},
+  "reasoning": "GVZ at 92nd percentile; Model B P(IV>RV)=0.71; FOMC passed; no events through expiry; RAG: Sinclair ch. 7 on high-IV mean reversion.",
+  "confidence": 0.62,
+  "kill_criteria": ["GVZ +20% intraday", "GLD breach 222 or 233", "30 days to expiry"],
+  "model_versions": {"A": "v3.2", "B": "v2.1", "C": "v1.8"},
+  "rag_citations": ["sinclair_ch7_chunk_42", "journal_2024_03_18"]
+}
+```
+
+The risk layer validates this; rejections are logged with reason codes.
+
+---
+
+## 8.5 Live Scenario Manager (Intraday Layer)
+
+The architecture above is daily-decision driven. To run full trading days you want an intraday layer that maintains live hypotheses about market state and only escalates to the LLM orchestrator when something actionable develops. Your session-based instinct is correct — the formal name for this is a **scenario manager** or **live hypothesis tracker**.
+
+### 8.5.1 What a scenario is
+
+A scenario is a stateful hypothesis with three components:
+- **Thesis**: what should happen and why ("GVZ breaking 18 from below confirms vol expansion regime; long calendar should outperform")
+- **Confirmation conditions**: data that would validate the thesis further
+- **Invalidation conditions**: data that would kill the thesis
+
+Each scenario is born from a numerical trigger, lives candle-by-candle while sustaining, and dies on invalidation, expiry, or confirmation-and-action.
+
+### 8.5.2 Scenario lifecycle
+
+```
+[Numerical trigger] → [BIRTH] → [DEVELOPMENT] → [CONFIRMATION → trade event]
+                                       │              or
+                                       ▼
+                                 [INVALIDATION → silent death]
+                                       or
+                                 [TIMEOUT → silent death]
+```
+
+States:
+- **Pending** — just born; needs N candles of development before emitting
+- **Active** — thesis still holds, accumulating supporting evidence
+- **Confirmed** — confirmation conditions met; emit trade event to orchestrator
+- **Invalidated** — kill conditions met; log and discard
+- **Expired** — time window passed without confirmation; log and discard
+
+### 8.5.3 Frequency and the cost question
+
+**Do not call the LLM every candle.** Numerical rules update scenario state per candle (microseconds, free). The LLM is invoked only at lifecycle transitions:
+
+| Transition | LLM call? | Why |
+|---|---|---|
+| Birth (rule-triggered) | No | Rule decides; LLM is overkill |
+| Active update | No | Numerical state machine only |
+| Confirmation | Yes | Generate trade plan |
+| Invalidation | No | Logged for offline post-mortem |
+| Expiration | No | Logged for offline post-mortem |
+| Daily post-mortem batch | Yes (once) | Learn from dead scenarios in aggregate |
+
+This is the difference between a sound system and a $5K/month API bill that doesn't make money.
+
+**Default candle frequency: 15-minute bars for GLD**, given a multi-day holding horizon. 5-min is too noisy for swing-oriented setups — generates more events than actionable signal at this hold duration. 1-minute is unusable. Configurable per scenario type: scenarios needing finer resolution (event_anticipation around FOMC/CPI release moments) can drop to 5-min explicitly; everything else stays at 15.
+
+### 8.5.4 What "sustaining" means precisely
+
+Define this rigorously or you'll get flapping (born/killed/born/killed on noise). A scenario is sustaining if **all** are true:
+
+- **Time**: not expired (default 1 trading day for momentum, 1.5 trading days for vol scenarios, configurable per type)
+- **Price**: no invalidation level breached on closing basis (not intra-bar wicks)
+- **Volume**: confirms or at minimum doesn't contradict (defined per scenario type)
+- **Vol regime**: GVZ regime hasn't flipped against the thesis
+- **Coherence**: no opposing scenario has reached confirmation (resolves conflicts)
+
+If any fails → scenario dies, no further events emitted. State machine is deterministic; same inputs always produce same transitions.
+
+### 8.5.5 Concrete scenario types for GLD options
+
+| Scenario | Birth trigger | Confirmation | Invalidation | Default TTL |
+|---|---|---|---|---|
+| Vol expansion | GVZ +5% intraday + Model A regime probability rising 2 candles | GVZ closes above 21-day rank 80, IV-RV spread > 2 vol points | GVZ retraces >50% of birth move within 3 candles | 1.5 trading days |
+| Vol crush | GVZ at ≥95th percentile + GLD 20-bar range contracting | GVZ closes lower 3 consecutive 15-min after panic peak | New high in GVZ | 1 trading day |
+| Directional breakout | GLD breaks 21-day high/low on volume ≥1.5× avg + macro alignment | Sustained move + retest holds within 2 candles | Reclaim of broken level on close | 1 trading day |
+| Mean reversion | GLD overshoot vs real-yield-implied fair value (>2σ) | Price stalls + vol-of-vol declining | Continuation through next std dev | 1 trading day |
+| Event anticipation | <48h to FOMC/CPI + IV expansion in event-week strikes | IV continues expanding into event | Event passes without trade plan | until event |
+
+### 8.5.6 Event emission discipline
+
+Events fire **only at lifecycle transitions**, not on every state update:
+
+- `scenario_born` — orchestrator may pre-fetch context (cheap RAG warm-up); no trade action
+- `scenario_confirmed` — orchestrator generates trade plan candidate (full LLM call)
+- `scenario_invalidated` — log only; consumed by daily post-mortem
+- `scenario_expired` — log only; consumed by daily post-mortem
+
+**Hard rate limit**: max 6 trade-actionable (`scenario_confirmed`) events per session. Hits the limit → no new actionable events for the session, only logging. Prevents alert fatigue and over-trading on noisy days.
+
+### 8.5.7 Integration with the daily orchestrator
+
+The daily orchestrator (section 8) makes morning planning and end-of-day position-sizing decisions. The scenario manager handles intraday triggers. They share state:
+
+- At market open, daily orchestrator marks "watch list" scenarios based on overnight setup (e.g., "watch for vol expansion if GVZ breaks 19")
+- Scenario manager promotes watch list items to active when birth triggers fire
+- Confirmed scenarios call back to orchestrator for full trade plan generation
+- All trades pass through the rule-based risk layer — no exceptions for "high confidence" scenarios
+
+### 8.5.8 State management
+
+- **Active scenarios**: Redis with TTL on each key (auto-cleanup on expiry)
+- **Scenario history**: TimescaleDB (full audit trail for offline learning)
+- **Active scenario count**: visible on monitoring dashboard with alerts at unusual counts (>6 alive concurrently at 15-min cadence usually means trigger logic is too loose)
+
+### 8.5.9 What this layer does NOT do
+
+To prevent scope creep:
+- Does not place trades (orchestrator + risk layer do)
+- Does not size positions (rule layer does)
+- Does not call the LLM continuously (only at transitions)
+- Does not override daily plan (it adds to it)
+- Does not run on every tick (5-min/15-min candles only)
+
+---
+
+## 8.6 LLM Tiering and Cost Optimization
+
+Not all LLM calls are equally consequential. Stratify by stakes and use the cheapest model that meets the bar at each tier. Naive deployment using Sonnet for everything costs $200–400/month at full intraday usage. A tiered deployment costs $20–50/month with negligible quality loss.
+
+### 8.6.1 Three-tier strategy
+
+| Tier | Calls per day | Stakes | Recommended | Fallback |
+|---|---|---|---|---|
+| 1 — Orchestrator (trade plan generation) | 5–15 | High — generates executable trade plans | Claude Sonnet 4.6 OR self-hosted Qwen 2.5 72B | DeepSeek V3 |
+| 2 — Scenario reasoning, RAG synthesis | 20–60 | Medium — pre-stages context, synthesizes RAG | DeepSeek V3 OR Haiku 4.5 | Qwen 2.5 32B self-hosted |
+| 3 — Sentiment, classification, post-mortem | 100s–1000s | Low — atomic classification, batched analysis | Fine-tuned FinBERT, Qwen 2.5 3B-LoRA | n/a |
+
+### 8.6.2 Specific model evaluation
+
+**Claude Sonnet 4.6** — best tool use and structured-output reliability; best at following complex instructions. ~$3/M input, $15/M output. Use for Tier 1 if reliability matters more than cost.
+
+**Claude Haiku 4.5** — strong tool use, very fast. ~$1/M input, $5/M output. Tier 2, or Tier 1 if budget-constrained.
+
+**DeepSeek V3** — strong reasoning, decent tool use. ~$0.27/M input, $1.10/M output (~10x cheaper than Sonnet). Great cost/quality ratio for Tier 1 or 2. Concern: hosted in China; if proprietary signal data privacy matters, self-host the open weights.
+
+**DeepSeek R1** (reasoning model) — strong at structured thinking through complex decisions. Higher than V3 but cheaper than Sonnet. Use for Tier 1 when explicit reasoning chains in trade plans add value.
+
+**Grok** — tool use less battle-tested than Claude/GPT; no notable advantage for financial reasoning. Skip for production trading.
+
+**Self-hosted Qwen 2.5 72B** — comparable to GPT-4o on reasoning benchmarks. Cost: amortized GPU (free if you have idle capacity at AIQ). Tier 1 with full data control. Setup: vLLM on 4× A100 80GB or 2× H100; ~30–50 tok/s with batching.
+
+**Self-hosted Qwen 2.5 32B** — solid for Tier 2 reasoning. Runs on a single A100 80GB. Tier 2 if you want self-hosted across the stack.
+
+### 8.6.3 Specific recommendation for your build
+
+**Weeks 1–12 development**: Claude Sonnet 4.6 via API. Reliability matters when you're debugging the orchestrator. Total cost during paper-trading phase: ~$30–60/month.
+
+**Production deployment, two paths:**
+
+- **Path A — minimize ops overhead**: Sonnet 4.6 (T1) + Haiku 4.5 (T2) + FinBERT (T3). Total ~$50–100/month, all managed.
+- **Path B — self-host Tier 1**: Qwen 2.5 72B on your AIQ GPU capacity (T1) + DeepSeek V3 API (T2) + FinBERT (T3). Total ~$5–15/month + amortized GPU. Full data control. More ops overhead.
+
+Start Path A while tuning. Migrate to Path B once stable.
+
+### 8.6.4 What LLMs should NOT do (cost trap)
+
+This is where most retail builds explode in cost without improving outcomes:
+
+- **Identifying support/resistance from raw price data** — use deterministic Python (peak detection + DBSCAN clustering on swing points, weight by touches × volume × recency). LLMs hallucinate levels.
+- **Chart pattern recognition** — define patterns algorithmically (bull flag, H&S, ascending triangle have mathematical definitions), detect with code, feed flags to the LLM as structured inputs.
+- **Trend strength estimation** — ADX, regression slope, Mann-Kendall test. Deterministic.
+- **Per-tick or per-candle analysis** — never. State machines update; LLM only on transitions.
+- **Backtesting decisions** — historical replay should never call the LLM. Write deterministic policies; validate offline; only invoke the LLM in live paper/real trading.
+
+The LLM is a reasoner over structured inputs, not a feature extractor. Every dollar saved here is a dollar that doesn't degrade your edge.
+
+### 8.6.5 Reference architecture for S/R and pattern detection (deterministic)
+
+```python
+# Support/resistance — deterministic, 50 lines of Python
+def find_sr_levels(prices, volumes, n_lookback=200):
+    # 1. Find swing highs/lows
+    peaks_idx = scipy.signal.find_peaks(prices, distance=5)[0]
+    troughs_idx = scipy.signal.find_peaks(-prices, distance=5)[0]
+    swing_points = np.concatenate([prices[peaks_idx], prices[troughs_idx]])
+
+    # 2. Cluster nearby swing points
+    clusters = DBSCAN(eps=prices.mean() * 0.005, min_samples=2).fit(swing_points.reshape(-1, 1))
+
+    # 3. Score each cluster: touches × avg_volume_at_touches × recency_decay
+    levels = []
+    for cluster_id in set(clusters.labels_):
+        if cluster_id == -1: continue
+        members = swing_points[clusters.labels_ == cluster_id]
+        score = len(members) * mean_volume_near(members) * recency_weight(members)
+        levels.append({"level": members.mean(), "score": score, "touches": len(members)})
+
+    return sorted(levels, key=lambda x: -x["score"])
+
+# Then, the LLM gets:
+#   "Current price 230.15. Nearest resistance: 232.40 (5 touches, score 0.82).
+#    Nearest support: 228.10 (3 touches, score 0.61)."
+# It uses this for reasoning. It does not compute it.
+```
+
+Same pattern for trend, momentum, regime classification, pattern detection. The boundary between "compute" and "reason" is the boundary between Python and LLM.
+
+---
+
+## 8.7 Sessions: Schema, Persistence, and Case-Based Retrieval
+
+Your refinement of the session concept unifies two powerful ideas: (1) every scenario instance becomes a durable record with full history, and (2) the same record schema serves backtest, live trading, and case-based retrieval for new signals. **This is the single highest-leverage architectural decision in the system** — implementing it cleanly is the difference between a system that compounds knowledge over time and one frozen the day you ship it.
+
+### 8.7.1 Terminology: scenario vs. session
+
+- **Scenario** — a *type* (vol_expansion, vol_crush, directional_breakout). A class with birth/confirmation/invalidation rules.
+- **Session** — a *specific instance* of a scenario. An object with a unique ID, a birth state, an evolving candle history, a trade (if taken), and a final resolution.
+
+The scenario manager spawns sessions. Sessions live, accumulate, and resolve. Persisted sessions are the system's memory.
+
+### 8.7.2 Session schema
+
+```sql
+CREATE TABLE sessions (
+    session_id        UUID PRIMARY KEY,
+    scenario_type     TEXT NOT NULL,
+    mode              TEXT NOT NULL,        -- 'backtest' | 'paper' | 'live'
+
+    created_at        TIMESTAMPTZ NOT NULL,
+    resolved_at       TIMESTAMPTZ,
+    state             TEXT NOT NULL,        -- 'pending'|'active'|'confirmed'|'invalidated'|'expired'
+
+    -- Snapshot at birth (single source of truth for retrieval)
+    birth_state       JSONB NOT NULL,       -- features, model preds, sentiment, regime, S/R levels
+    birth_embedding   VECTOR(768),          -- for case-based retrieval (pgvector)
+
+    -- Evolution
+    candle_history    JSONB,                -- ordered list of candle + feature snapshots
+
+    -- If a trade was taken
+    trade             JSONB,                -- structure, entry, exit, P&L attribution
+
+    -- Outcome
+    outcome           TEXT,                 -- 'success' | 'failure' | 'invalidated' | 'expired'
+    pnl_usd           NUMERIC,
+    duration_minutes  INT,
+
+    -- Post-mortem (LLM-generated at resolution; batched daily for cheap models)
+    post_mortem       JSONB,                -- structured lessons, contributing factors
+
+    -- Versioning (critical for reproducibility across model retrains)
+    model_versions    JSONB,
+    code_version      TEXT
+);
+
+SELECT create_hypertable('sessions', 'created_at', chunk_time_interval => INTERVAL '7 days');
+CREATE INDEX ON sessions (scenario_type, mode);
+CREATE INDEX ON sessions (state) WHERE state IN ('pending', 'active');  -- hot path
+CREATE INDEX ON sessions USING ivfflat (birth_embedding vector_cosine_ops);
+```
+
+**Critical**: `birth_state` is the single source of truth for retrieval and similarity matching. Make it complete on day one — you cannot retroactively add features to historical sessions without invalidating the embedding space.
+
+### 8.7.3 Lifecycle persistence
+
+| Event | DB operation |
+|---|---|
+| Session born | `INSERT` with `birth_state`, `birth_embedding`, `state='pending'` |
+| Candle update (still sustaining) | `UPDATE candle_history = candle_history \|\| new_snapshot` |
+| State transition (pending → active, etc.) | `UPDATE state` |
+| Trade entry | `UPDATE trade = jsonb_set(...)` |
+| Trade exit / session resolution | `UPDATE outcome, pnl_usd, resolved_at, post_mortem` |
+
+The session record is **append-only during life, frozen at resolution**. This makes backtest replay deterministic and post-hoc analysis reliable across versions.
+
+### 8.7.4 Backtest/live parity (the principle)
+
+**Backtests replay through the same scenario manager code as live, with the same feature pipeline, writing to the same sessions table — only `mode` differs.**
+
+Concretely:
+- Same `Scenario` subclasses evaluate triggers in both modes
+- Same `compute_features()` builds feature snapshots
+- Backtest engine replays historical candles through `ScenarioManager.on_candle()` exactly as live does
+- All sessions write to the `sessions` table; only `mode` differs
+
+| Capability | Without parity | With parity |
+|---|---|---|
+| Verify backtest matches live | Manual reconciliation, error-prone | Direct SQL comparison |
+| Add a new feature | Update both pipelines | Update once |
+| Run analytics | Two separate code paths | One code path |
+| Find bugs in trigger logic | "Works in backtest, broken in live" | Bugs surface in either mode |
+| Re-backtest with new code | Painful | One command |
+| Track performance attribution | Approximate | Exact |
+
+This is **research/production parity**. Most retail systems don't have it — which is why their backtests don't predict their live results. Implementing it is one decision (run backtest through the same code path as live) and saves you months over the system's lifetime.
+
+### 8.7.5 Case-based retrieval (signal augmentation)
+
+When a new session is born, retrieve the top-k most similar historical sessions and pass their outcomes to the orchestrator as structured context. The LLM reasons from your *actual track record*, not generic principles.
+
+Pipeline:
+
+1. **On session birth**, compute `birth_embedding`:
+   - Concatenate normalized numerical features + one-hot categoricals
+   - Optionally pass through a learned encoder (autoencoder or contrastive-trained projection) for better similarity geometry
+   - Resulting vector lives in the same space as historical sessions
+
+2. **Query** Qdrant (or pgvector — start there since you have Postgres):
+   - Top-k cosine-similar historical session births
+   - Filter by `scenario_type = current.scenario_type`
+   - Filter by `mode IN ('live', 'paper')` only — exclude backtest from live retrieval to avoid the lookahead-style biases of overfit backtests influencing real decisions
+
+3. **Aggregate outcomes**:
+   - Confirmation rate (% of similar sessions that reached `state='confirmed'`)
+   - Mean P&L (and distribution: 25th/50th/75th percentiles)
+   - Mean duration to confirmation
+   - Common invalidation patterns (top failure modes via clustering on candle_history)
+
+4. **Pass to orchestrator** as structured context:
+
+```
+RETRIEVAL CONTEXT (47 historical sessions matched at ≥0.85 cosine similarity):
+- Confirmation rate: 66% (31/47)
+- Avg time to confirmation: 1.4 hours
+- Avg P&L when traded: +0.78%, std 1.2%
+- P25 / P50 / P75 P&L: -0.4% / +0.6% / +1.7%
+- Top 3 invalidation patterns:
+    1. GVZ retrace within 2 candles (8 occurrences)
+    2. DXY counter-move (4 occurrences)
+    3. Volume failed to confirm (4 occurrences)
+- Most similar session: 2024-09-12, confirmed in 0.8h, P&L +1.4%
+```
+
+The orchestrator now has empirical grounding. The meta-labeler in §15.2 can use the same retrieval as input — "what fraction of similar sessions confirmed?" is a feature, not a prompt.
+
+### 8.7.6 Save failures, not just successes
+
+Failed and invalidated sessions are training signal:
+
+- They feed the meta-labeling model — it cannot learn "should I take this signal?" without seeing bad signals
+- They reveal weak trigger conditions (high birth-rate, low confirmation-rate types need tightening)
+- They expose regime-dependent failure modes that single regimes miss
+- They keep case-based retrieval distributions honest, not survivorship-biased
+
+Save every session. Label by outcome. Train on all of it.
+
+### 8.7.7 Storage and operations
+
+Volume estimates:
+- Live: ~5 sessions/day × 250 trading days × ~50KB/session = ~60MB/year
+- Backtest: re-running 5 years across all scenario types ≈ 50K sessions × 50KB = ~2.5GB per full backtest
+- A few GB/year — trivial for TimescaleDB
+
+Operational:
+- Compress hypertable chunks older than 30 days
+- Keep `birth_embedding` index hot in RAM (small, queried often, cosine-similarity is fast on ivfflat)
+- For chunks older than 1 year, you can drop `candle_history` while preserving `birth_state`, `trade`, and `outcome` — the analytic core remains
+
+### 8.7.8 What this enables (cumulative summary)
+
+Once sessions are persisted with this schema, you get for free:
+- A unified analytics surface (Grafana queries the same table for backtest, paper, live)
+- Case-based retrieval as orchestrator context
+- Meta-labeling input data
+- Online learning data for adaptive trigger thresholds
+- Post-mortem aggregation (run the LLM once daily over batches of resolved failed sessions; cheap, learns trigger weaknesses)
+- A reproducibility log — every trade ties back to model_versions, code_version, and the full feature snapshot at decision time
+
+This single schema is the system's long-term memory. Get it right early; everything else compounds on top.
+
+---
+
+## 9. Strategy Layer (Mapping Predictions to Structures)
+
+Blindly buying calls every time the model says "up" loses to theta decay. Structure selection is half the edge.
+
+| Vol regime | Model B (IV vs RV) | Model C (direction) | Optimal structure |
+|---|---|---|---|
+| High IV | Short vol | Neutral | Iron condor, 30–45 DTE |
+| High IV | Short vol | Strong directional | Credit spread in direction |
+| Low IV | Long vol | Neutral | Long calendar at ATM |
+| Low IV | Long vol | Strong directional | Long debit spread |
+| Mid IV | Mixed | Strong directional | Vertical spread, defined risk |
+| Any | — | Event imminent | Skip new; consider closing existing |
+
+Scenario triggers can override defaults — e.g., a confirmed `vol_expansion` scenario may favor a long calendar even at mid IV if the term structure is flattening.
+
+DTE selection: 30–60 days as default for multi-day swing holds (was 30–45). Longer holds favor more vega and less gamma — theta-vega trade-off shifts toward slightly longer expiries. Avoid 0DTE on GLD (illiquid wings, unpredictable).
+
+---
+
+## 10. Risk Management (Rules, No LLM)
+
+Hard, code-enforced, no override:
+
+- **Per-trade max loss**: 1.5% of account equity
+- **Concurrent open trades**: max 4
+- **Portfolio |delta|**: < 30% of account equity in directional exposure
+- **Portfolio |vega|**: < 0.5% of equity per vol point
+- **Portfolio theta**: cap negative theta on long-vol at 0.3% of equity per day
+- **Drawdown circuit breaker**: 30-day P&L < -10% → halt new trades for 5 sessions, force review
+- **Event blackouts**: no new positions in last 48h before FOMC/CPI/NFP unless event-specific
+- **Sizing formula**: `f = 0.25 × Kelly`, capped at 1.5% per trade
+- **Intraday event rate limit**: max 6 `scenario_confirmed` trade events per session
+- **Concurrent scenario cap**: max 6 active scenarios at 15-min cadence; alert if exceeded (signal of broken trigger logic)
+
+### On "leverage"
+For options, leverage is implicit in delta exposure. Don't think in multiples. Think in:
+1. **Capital at risk** per trade (premium for long, max loss for spreads)
+2. **Total portfolio delta** as % of equity
+3. **Notional exposure** for sanity checks
+
+A 0.30-delta GLD call at $1.50 premium controls ~30 deltas of GLD per contract. At $230 GLD, that's $6,900 notional per $150 premium — 46x notional leverage. Forget the multiplier; size by max-loss.
+
+---
+
+## 11. Backtesting Framework
+
+Build this **before** any live capital:
+
+- **Bar-level options simulation** with bid/ask, not midpoint fills
+- **Slippage**: `mid - 1c` on liquid GLD monthlies, `mid - 2-3c` on weeklies and wings
+- **Commissions**: $0.65/contract round trip baseline
+- **Assignment/exercise modeling** for short options
+- **No look-ahead**: features at `t-1` only
+- **Walk-forward refits**: quarterly
+- **Multiple metrics**: Sharpe, Sortino, Calmar, max DD, time underwater, % winning months, tail ratio
+
+For the scenario manager specifically: replay historical 5-min bars through the state machines, log all scenarios fired, compute hit rates per scenario type. This validates trigger logic before any LLM integration.
+
+**Libraries**: `vectorbt` for fast iteration, then a custom event-driven backtester for options realism. `optopsy` for prototype options backtests.
+
+### Red flags in backtest results
+- Sharpe > 3 → almost certainly overfit
+- Max DD < 8% over 5+ years → almost certainly overfit
+- Win rate > 70% on directional → almost certainly overfit
+- Smooth equity curve with no losing months → look-ahead bias somewhere
+- Scenario hit rate > 80% → trigger logic is too loose (data leakage) or too tight (selection bias)
+
+---
+
+## 12. Deployment (Plays to Your Existing Stack)
+
+You have AKS, Triton, Qdrant, RabbitMQ, TimescaleDB. Use them:
+
+| Component | Infrastructure |
+|---|---|
+| Models A/B/C | ONNX → Triton on AKS |
+| FinBERT sentiment | Triton |
+| Embeddings | Triton or sentence-transformers service |
+| Vector store | Qdrant |
+| Feature store | TimescaleDB |
+| **Scenario state** | **Redis with TTL keys (auto-cleanup)** |
+| **Scenario history** | **TimescaleDB** |
+| Message bus | RabbitMQ (news → sentiment → features; scenario events → orchestrator) |
+| Real-time market data | WebSocket consumer service on AKS |
+| Orchestrator agent | Python service on AKS, triggered by cron + RabbitMQ events |
+| Monitoring | Grafana on Prometheus |
+
+### Monitoring
+- **Feature drift**: PSI per feature distribution vs training
+- **Calibration drift**: rolling Brier score on Models B and C
+- **P&L vs expectation**: rolling 30-day actual vs backtest-implied confidence interval
+- **Latency / freshness**: alert if feature staleness > 15 minutes during market hours
+- **Active scenario count**: alert at >10 (upper) or 0 across full session (lower — trigger logic broken)
+- **Scenario hit rate by type**: rolling 30-day; alert on regime change
+
+---
+
+## 12.5 Live Signal Delivery and Human-in-the-Loop UX
+
+The architecture can be perfect, plans excellent, and the system still fails if the path from "session confirmed" to "order at broker" is broken. This section covers operational reality: how you actually receive, decide, and execute, given a full-time job at AIQ and US market hours of 5:30pm–midnight UAE.
+
+### 12.5.1 The principle: human-in-the-loop first, not auto-execute
+
+For the first 6+ months of live operation: **do not auto-execute.** Reasons:
+- Catches early-system mistakes (and there will be many)
+- Catastrophic failures (data feed issues, broker bugs, regime shifts) need human judgment
+- Your skip/modify decisions are training data for the meta-labeler — high-quality, hard to obtain otherwise
+- Builds intuition for the system's behavior — itself an edge
+
+After 6+ months of consistent track record, **selective** auto-execution becomes viable for proven scenario types with hard size caps. Never a blanket switch.
+
+### 12.5.2 The signal flow
+
+```
+Session confirmed by scenario manager
+       ↓
+LLM orchestrator generates trade plan
+       ↓
+Risk layer validates (first pass)
+       ↓
+[ROUTING DECISION]
+       ↓
+Confidence × Size:
+  HIGH conf + SMALL size  → notify; auto-execute candidate (after track record)
+  HIGH conf + LARGE size  → notify with urgency, require approval, time-limited
+  MED conf + ANY size     → notify, no urgency, longer expiry window
+  LOW conf                → log only, no notification
+       ↓
+Telegram + dashboard notification
+       ↓
+You: Approve / Skip / Modify / Ignore
+       ↓
+On approve: risk layer re-validates with current prices, order to broker
+On skip: logged with reason → feeds meta-labeler
+On modify: adjusted plan re-validates, order to broker
+On timeout: logged as expired → feeds meta-labeler
+```
+
+### 12.5.3 Notification channel: Telegram bot
+
+For mobile-first trading signals, Telegram beats SMS, email, and push apps:
+- Sub-second delivery latency
+- Inline keyboard buttons (one-tap Approve / Skip / Modify / Details)
+- Cross-platform (iOS, Android, desktop) with synchronized reads
+- Free, no rate limits at your volume
+- Easy to build with `python-telegram-bot`
+- Full message history searchable
+
+Set up a private channel (you only) with a bot for interactive responses.
+
+### 12.5.4 Notification message format
+
+Constraint: must be readable in 5 seconds, actionable in 10. Mobile screen, evening fatigue.
+
+```
+🎯 SCENARIO CONFIRMED — vol_expansion
+Confidence: 0.68 | Risk: $1,245
+
+Structure: Iron Condor 6/19
+  220/215 put | 235/240 call
+Credit: $0.85 | Size: 3 contracts
+
+REASONING (top 3):
+• GVZ at 92nd %ile, IV-RV spread +2.4
+• Model B P(IV>RV) = 0.71
+• 47 historical sessions matched:
+  66% confirmed, avg P&L +0.78%
+
+EVENTS: FOMC passed; clear through expiry
+KILL: GVZ +20% | GLD breach 222/233
+
+[ ✅ Approve ] [ ✏️ Modify ] [ ❌ Skip ]
+[ 📊 Full details ]
+
+⏱ Auto-expires in 60 minutes
+```
+
+Design rules:
+- Lead with confidence and dollar risk
+- Top 3 reasons only — full reasoning in dashboard
+- Always include historical retrieval stats — that's the actual edge
+- Time-sensitivity explicit
+
+### 12.5.5 Approval, skip, and modify flows
+
+**Approve** → risk re-validates with current prices (delta and IV drift between signal and approval) → submit limit order at calculated price → notification "Order submitted; tracking fill" → on fill, notification with actual price + slippage vs target → session updated.
+
+**Skip** → quick-reason buttons appear: [Already positioned] [Market feel wrong] [Conflict with event] [Other]. **This data is gold** — feeds the meta-labeler. The model learns "when Manan skips with 'feel wrong', similar setups typically failed" and starts filtering them upstream.
+
+**Modify** → inline editable: size, strikes, expiry. Modified plan re-validates against risk layer. Logs delta from original — also training signal.
+
+**Ignore (timeout)** → session marked `outcome='expired'`. Pattern of ignored signals triggers a notification-fatigue alert. May indicate the threshold is too low.
+
+### 12.5.6 Trader dashboard (Streamlit, then Next.js)
+
+Single-page dashboard with five panels:
+
+| Panel | Content |
+|---|---|
+| Active sessions | Live state of unresolved sessions, sortable by confidence |
+| Today's signals | Approved/skipped/modified/expired log with reasons |
+| Open positions | Each trade with current P&L, Greeks, kill criteria status |
+| Portfolio risk | Total delta, vega, theta vs limits; drawdown vs circuit breakers |
+| Upcoming events | Macro calendar with blackout windows highlighted |
+
+Start with Streamlit (fast to build, runs on your existing K8s). Migrate to Next.js when you want richer interactions.
+
+### 12.5.7 Time-zone reality (UAE-specific)
+
+US market hours in UAE:
+- Open: 5:30pm UAE (winter) / 6:30pm (summer DST)
+- Close: 12:00am / 1:00am UAE
+- FOMC announcements: 10:00pm–11:00pm UAE
+- CPI/NFP: 4:30pm–5:30pm UAE (around market open)
+
+Implications:
+- Most actionable signals fire 6pm–11pm UAE — when human bandwidth is lowest
+- Critical-priority notifications can ring through Do Not Disturb (Telegram channel-level setting)
+- Notification escalation: missed high-confidence signal at 11pm → SMS fallback (Twilio)
+- **Auto-close triggers (kill criteria) MUST work without human intervention** — you'll be asleep when 1am stops fire. Implement these in the broker-side OCO orders or in a separate low-LLM watchdog process.
+
+### 12.5.8 The kill switch
+
+Single command from phone or dashboard:
+- Halts all new scenario birth events (no new signals can fire)
+- Optionally closes all open positions at market
+- Tags reason for the halt
+- Locks until manually re-enabled
+
+Implementation: a flag in Redis (`system_state.trading_halted = true`). Every component checks before acting. Trip on:
+- Manual decision (traveling, distracted, system feels wrong)
+- Auto-trip on circuit breakers (drawdown, broker errors, data feed staleness >5 min during market hours)
+- Auto-trip on confidence collapse (rolling Brier score degradation >20% over 60 days)
+
+### 12.5.9 Audit trail
+
+Every notification, every approval/skip/modify, every order, every fill, every kill-switch event → logged to TimescaleDB, tied to `session_id`. This is your reproducibility layer; when something goes wrong you can replay exactly what happened.
+
+Monthly retrospective: which signal types do you skip most? Which skip reasons predict actual failures? Are you systematically missing best signals due to 11pm fatigue? The data tells you.
+
+### 12.5.10 Roadmap integration
+
+Add to v1 weeks 11–12 (paper trading phase):
+- Telegram bot with mock approve/skip flow
+- Streamlit dashboard for active sessions
+- Audit logging end-to-end
+
+In v2 (weeks 13–16):
+- Real broker integration on approve (Alpaca or IBKR)
+- Modify flow with risk re-validation
+- Kill switch with auto-trips
+
+Selective auto-execution: **not before month 6** of consistent live performance, and only for specific scenario types with confirmed track record (≥50 live sessions, hit rate within 5% of backtest).
+
+---
+
+## 13. Phased Roadmap
+
+The system has compounding dependencies — get each layer working before the next.
+
+### v1 — Daily-decision system (weeks 1–12)
+
+**Weeks 1–2: Foundation**
+- Data pipeline: prices, macro, vol, COT into TimescaleDB
+- Backtest framework with realistic options simulation (over-invest here)
+- **Baseline strategy**: "sell credit spread when IV rank > 70" — your benchmark
+
+**Weeks 3–4: Models A & B**
+- Train vol regime classifier and IV mispricing model
+- Walk-forward validation, isotonic calibration
+- Paper-trade outputs to log file
+
+**Weeks 5–6: News + sentiment**
+- Build labeled corpus
+- Fine-tune FinBERT
+- Integrate sentiment as features
+- Retrain Models A & B with sentiment; measure lift
+
+**Weeks 7–8: RAG knowledge base**
+- Ingest books (chunked, embedded, indexed in Qdrant)
+- Whisper-transcribe video corpus, clean, ingest
+- Test retrieval on 50 hand-crafted queries
+- Build re-ranker
+
+**Weeks 9–10: Daily orchestrator agent**
+- Tool implementations
+- Decision loop with structured output validation
+- End-to-end paper run on historical days (replay mode)
+
+**Weeks 11–12: Live paper trading (daily decisions only)**
+- Run end-to-end on paper for ≥4 weeks
+- Compare actual paper P&L to backtest expectation
+- Tune risk parameters
+
+### v2 — Add intraday scenario manager (weeks 13–16)
+
+**Weeks 13–14: Scenario engine**
+- Real-time WebSocket data ingestion
+- State machine framework (one base class, scenario types as subclasses)
+- Implement 3 of the 5 scenario types (start with vol_expansion, vol_crush, directional_breakout)
+- Backtest scenarios on historical 5-min bars; validate hit rates
+
+**Week 15: Integration**
+- Scenario events → RabbitMQ → orchestrator
+- Watch list handoff from daily orchestrator
+- Risk layer: intraday event rate limits
+
+**Week 16: Live paper trading (full system)**
+- Run for ≥4 weeks
+- Compare scenario manager hit rates to backtest
+- Tune triggers per scenario type
+
+### v3 — Capital ramp (months 5+)
+
+- $5K real → $20K only after 60 days live tracking expectation
+- $20K → $50K after 90 more days
+- Never deploy full size from day one
+
+---
+
+## 14. Failure Modes & Kill Criteria
+
+| Trigger | Action |
+|---|---|
+| Calibration error > 15% on rolling 60-day window | Freeze affected model, retrain with recent data |
+| 90-day live Sharpe < 0.5 | Halt, post-mortem, identify drift |
+| Single trade loss > 2× expected max loss | Full system halt, audit execution + risk layer |
+| GVZ enters regime not seen in training | Reduce all sizes 50%, gather data, retrain when sufficient |
+| 30-day drawdown > 10% | Halt new trades for 5 sessions, mandatory review |
+| Scenario hit rate drops >20% absolute from backtest | Disable affected scenario type, debug triggers |
+| Active scenario count flat at 0 for full session | WebSocket / trigger logic broken, alert and investigate |
+| Active scenario count > 15 concurrent | Trigger logic too loose, throttle and review |
+
+---
+
+## 15. Accuracy Improvement Levers
+
+Once your baseline daily-decision system is running with positive expectancy, the following techniques are where real edge gains come from. None are magic; all require careful implementation. Roughly ordered by leverage-per-effort:
+
+### 15.1 Triple-Barrier Labeling (Lopez de Prado)
+
+Most retail systems label by "did price move X% in N days?" This is wrong because it ignores path dependency — a trade that briefly hits TP then reverses is treated the same as one that drifts up smoothly. Triple-barrier labeling:
+
+1. Set a profit-take barrier (e.g., +1.5%)
+2. Set a stop-loss barrier (e.g., −1%)
+3. Set a time barrier (e.g., 5 days)
+4. Label each training example by which barrier hits first
+
+This trains the model on what actually generates P&L (asymmetric path-dependent outcomes). Implementation: `mlfinlab` library. Expected impact: significant precision gain — often the single biggest improvement you can make to a trading model.
+
+### 15.2 Meta-Labeling
+
+After your primary model predicts "trade or not," train a second model that predicts "should we take this signal?" The meta-model can use:
+- Primary model's confidence
+- Recent regime features
+- Recent meta-model performance (recursive)
+- Features the primary model doesn't see (news intensity, sentiment, scenario state)
+
+The meta-model filters low-quality primary signals. Expected impact: +5–15% absolute win rate at the cost of ~30% reduction in trade frequency. Net positive for Sharpe in almost every case.
+
+### 15.3 Probabilistic Position Sizing (Kelly with Calibrated Probabilities)
+
+Most retail systems size all trades equally. If your model outputs calibrated probability P with reward-to-risk R:
+
+```
+f_kelly = (P × R - (1 - P)) / R
+f_actual = min(0.25 × f_kelly, 0.015)   # quarter Kelly, capped at 1.5%
+```
+
+Sizing by confidence alone — not changing the model at all — typically adds 30–50% to Sharpe. This is the highest leverage-per-line-of-code improvement in the entire system.
+
+### 15.4 Combinatorial Purged Cross-Validation
+
+Standard k-fold CV is wrong for time series (leakage). Standard walk-forward is right but uses data inefficiently. Combinatorial purged CV:
+- Partitions time into N blocks
+- Creates many train/test combinations
+- Embargo period between train and test prevents leakage from autocorrelation
+- Yields a *distribution* of out-of-sample performance, not a single number
+
+Use this to evaluate strategies. If your 5th percentile Sharpe is positive, you have a real strategy. If only the median is positive, you got lucky in selection.
+
+### 15.5 Deflated Sharpe Ratio
+
+When you test K strategies and pick the best, the winner's Sharpe is biased upward. Deflated Sharpe accounts for:
+- Number of strategies tested (selection bias)
+- Higher moments (skew, kurtosis) of returns
+- Length of track record
+
+If raw Sharpe is 1.5 but deflated Sharpe is 0.4, you got lucky in selection. Stop and reformulate. Implementation: `mlfinlab.backtest_statistics.bt_statistics`.
+
+### 15.6 Multi-Task Targets
+
+Train a single LightGBM to predict multiple targets simultaneously (multi-output regression):
+- P(GVZ in top tercile in 5d)
+- P(realized vol > IV by 2 vol points in 21d)
+- E[GLD return | regime]
+- P(IV expansion event)
+
+The shared representation regularizes; often improves all targets vs. independent models. LightGBM supports it via custom objective + multi-output.
+
+### 15.7 Better Features — Order Flow and Dealer Positioning
+
+The features in section 4 are good but standard. The next tier (see §4.7 for tiered implementation guidance):
+- **Options dealer gamma exposure (GEX)**: aggregate dealer hedging flows. SpotGamma publishes; you can also compute from options chain.
+- **Charm (delta-decay) and vanna exposures**: dealer hedging as time passes and vol moves.
+- **Vol surface dynamics**: how the IV surface rotates day-to-day, not just where it sits.
+- **Cross-asset signals**: real-yield momentum, DXY positioning extremes, gold-vs-miners divergence.
+- **Implied correlation**: across gold, silver, miners.
+
+Diminishing returns: each additional feature class adds 1–3% of edge. Don't add for the sake of it.
+
+### 15.8 Ensemble with Regime Switching
+
+Different models work in different regimes:
+- 3 models, each trained on a specific vol regime (low / mid / high)
+- A regime classifier deciding which model's output to weight most heavily
+- Weighted ensemble of predictions
+
+Often beats a single all-regime model by 5–10% in backtest. Caveat: more parameters = higher overfitting risk. Validate aggressively with combinatorial purged CV.
+
+### 15.9 Operational Improvements (Underrated)
+
+These don't sound like accuracy improvements but compound massively:
+
+- **Tighter execution**: limit orders at mid; escalate to mid+1c only if not filled in 30s. Saves 5–15 bps per trade.
+- **Avoid first 15 minutes**: opening auction noise distorts fills.
+- **Avoid Friday close in long-vol positions**: weekend theta with no offsetting moves.
+- **Cancel and replace instead of marketing in/out**: better fills on liquid options.
+- **Trade most-liquid expiries**: 30–45 DTE on monthlies, not weeklies, for spreads. Wider spreads on weeklies eat 20–40% of expected edge.
+
+Across a year of trading, these can be the difference between Sharpe 1.0 and Sharpe 1.4.
+
+### 15.10 Online / Adaptive Learning
+
+Models go stale. Two adaptive approaches:
+- **Periodic refit**: quarterly walk-forward (already specified). Simple. Use this first.
+- **Online learning**: update model weights each day. Requires careful learning rate and regularization to avoid chasing noise.
+
+For starting out: stick with quarterly walk-forward. Add online learning only after you've identified what's drifting and why.
+
+### 15.11 What Sounds Like Improvement But Usually Isn't
+
+Avoid these traps:
+
+- **More features** — usually overfits. Parsimony itself is a feature.
+- **Deep learning instead of gradient boosting** — needs more data than you have for tabular finance. LightGBM wins on data of your scale.
+- **More LLM layers** — does not improve numerical accuracy.
+- **Social media sentiment** — too noisy, hard to filter, regime-dependent.
+- **Higher-frequency data on swing strategies** — false precision; aggregates to the same signal.
+- **Crypto/equity correlations as gold predictors** — regime-unstable; backtests well, lives badly.
+- **Reinforcement learning** — sample-inefficient, hard to tune, brittle to regime change. Don't go here unless you have a quant team.
+
+### 15.12 Order of Implementation
+
+If you do all 11 levers, you'll have a much better system. Priority order for incremental gains:
+
+1. Triple-barrier labeling (15.1) — biggest single gain
+2. Probabilistic Kelly sizing (15.3) — easiest single gain
+3. Meta-labeling (15.2) — second biggest gain
+4. Combinatorial purged CV + deflated Sharpe (15.4, 15.5) — better selection, fewer false positives
+5. Operational improvements (15.9) — execution edge
+6. Multi-task targets (15.6) — modest gain
+7. Order flow / dealer gamma features (15.7) — only if you can source the data cleanly
+8. Regime-switching ensemble (15.8) — last; only after baseline is solid
+
+---
+
+## 16. What This System Will Not Do
+
+- It will not predict gold prices with 80% accuracy. Nothing does.
+- It will not make you rich in 6 months.
+- It will lose money some weeks and some months. Sometimes for several months in a row.
+- The edge, if it exists, is statistical and only reveals itself over hundreds of trades.
+
+What it can do, if built well: produce a positive-expectancy systematic process that compounds capital while you keep your day job. Sharpe 1.2–1.5, drawdowns 15–18%, returns 20–30% annualized on capital-at-risk basis. That's a genuinely good outcome for a side-of-desk system.
+
+---
+
+## Appendix A: Tech Stack Summary
+
+| Layer | Choice | Why |
+|---|---|---|
+| Time-series store | TimescaleDB | Existing stack; perfect for OHLCV + scenario history |
+| Ephemeral state | Redis with TTL keys | Auto-cleanup of dead scenarios |
+| Vector store | Qdrant | Existing stack |
+| Tabular models | LightGBM (primary), CatBoost (ensemble) | Best on tabular finance data |
+| Sequence models (optional) | PatchTST or iTransformer | If sequential patterns add value |
+| Sentiment | FinBERT → Qwen 2.5 3B + LoRA | Start simple, upgrade if needed |
+| Embeddings | BGE-large-en-v1.5 | Strong general-purpose |
+| Re-ranker | bge-reranker-base | Fast, good quality |
+| Orchestrator LLM | Tiered: Sonnet 4.6 / Qwen 2.5 72B (T1) → DeepSeek V3 / Haiku 4.5 (T2) → FinBERT (T3) | Cost-stratified by call importance — see §8.6 |
+| Model serving | Triton on AKS | Existing stack |
+| Message bus | RabbitMQ | Existing stack |
+| Real-time data | Polygon / Databento / IBKR WebSocket | Polygon cheapest; IBKR if executing through them |
+| Backtesting | vectorbt + custom options engine | Speed + realism |
+| Execution | Alpaca (US) or IBKR | API-first brokers |
+
+---
+
+## Appendix B: Books to Read (and put in the KB)
+
+1. **Sheldon Natenberg — *Option Volatility & Pricing*** — definitive options bible
+2. **Euan Sinclair — *Volatility Trading*** — quantitative options trading
+3. **Euan Sinclair — *Positional Option Trading*** — directly relevant
+4. **John Hull — *Options, Futures, and Other Derivatives*** — academic but essential
+5. **Marcos López de Prado — *Advances in Financial Machine Learning*** — purged k-fold, meta-labeling, the right way
+6. **Ernie Chan — *Algorithmic Trading: Winning Strategies and Their Rationale*** — practical
+7. Selected papers: COT-based strategies, vol risk premium harvesting, regime-switching models
+
+---
+
+## Appendix C: First Sprint — Concrete Week 1 Tasks
+
+1. Set up `gld_research` repo with poetry, pre-commit, pytest
+2. TimescaleDB schema for `prices`, `options_chain`, `macro_features`, `vol_features`, `scenario_history`
+3. Data ingestion scripts:
+   - `ingest_gld_daily.py` (yfinance → TimescaleDB)
+   - `ingest_macro_fred.py` (FRED API → TimescaleDB)
+   - `ingest_gvz.py`
+   - `ingest_cot.py`
+4. First feature engineering pass (top 20 features only)
+5. Baseline strategy backtest: "sell 30-DTE iron condor when IV rank > 70, target 0.25 delta wings, exit at 50% profit or 21 DTE"
+6. Print backtest stats: Sharpe, MDD, win rate, avg win/loss
+
+If the baseline doesn't print Sharpe > 0.5 over 5 years, debug data and execution before building any ML on top.
+
+---
+
+## Appendix D: Scenario Manager Reference Implementation Sketch
+
+```python
+from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
+from typing import Literal
+from uuid import uuid4
+
+class Scenario(ABC):
+    """Base class for all scenario types."""
+
+    scenario_id: str
+    born_at: datetime
+    ttl: timedelta
+    state: Literal["pending", "active", "confirmed", "invalidated", "expired"]
+    thesis: str
+    birth_data: dict           # snapshot at birth for post-mortem
+
+    @abstractmethod
+    def check_birth(self, market_state) -> bool: ...
+
+    @abstractmethod
+    def check_confirmation(self, market_state) -> bool: ...
+
+    @abstractmethod
+    def check_invalidation(self, market_state) -> bool: ...
+
+    def update(self, market_state):
+        """Called once per candle. Returns event only on transitions."""
+        if self.state == "expired":
+            return None
+
+        if datetime.utcnow() - self.born_at > self.ttl:
+            self.state = "expired"
+            return ScenarioEvent("expired", self)
+
+        if self.check_invalidation(market_state):
+            self.state = "invalidated"
+            return ScenarioEvent("invalidated", self)
+
+        if self.state in ("pending", "active") and self.check_confirmation(market_state):
+            self.state = "confirmed"
+            return ScenarioEvent("confirmed", self)
+
+        return None  # silent — no event on routine sustaining update
+
+
+class VolExpansionScenario(Scenario):
+    ttl = timedelta(hours=4)
+    thesis = "GVZ breaking from low regime; vol expansion incoming; long calendar / backspread favored"
+
+    def check_birth(self, m):
+        return (m.gvz_intraday_change > 0.05
+                and m.model_a_high_regime_prob_rising_2_candles)
+
+    def check_confirmation(self, m):
+        return (m.gvz_close_above_rank_80
+                and m.iv_rv_spread > 2.0)
+
+    def check_invalidation(self, m):
+        return m.gvz_retraced_50pct_of_birth_move_within_3_candles
+
+
+class ScenarioManager:
+    def __init__(self, redis_client, rabbit_publisher):
+        self.redis = redis_client
+        self.publisher = rabbit_publisher
+        self.scenario_classes = [
+            VolExpansionScenario, VolCrushScenario,
+            DirectionalBreakoutScenario, MeanReversionScenario,
+            EventAnticipationScenario,
+        ]
+
+    def on_candle(self, market_state):
+        # 1. Check for new births
+        for cls in self.scenario_classes:
+            candidate = cls(scenario_id=str(uuid4()), born_at=datetime.utcnow())
+            if candidate.check_birth(market_state):
+                self._spawn(candidate)
+
+        # 2. Update active scenarios
+        for scenario in self._active_scenarios():
+            event = scenario.update(market_state)
+            if event:
+                self._handle_event(event)
+
+    def _handle_event(self, event):
+        # Persist history always
+        self._persist_history(event)
+        # Publish to orchestrator only on confirmation
+        if event.kind == "confirmed":
+            self.publisher.publish("scenarios.confirmed", event.serialize())
+```
+
+This is the skeleton. Real scenario classes have richer state and per-candle accumulators. Build base class + 1 scenario type + tests in week 13; add scenarios incrementally.
+
+---
+
+*Document version 1.6. Recalibrates for 15-min default cadence and multi-day swing holds: extends scenario TTLs, lengthens notification windows, shifts DTE preference to 30–60, introduces two-speed data architecture. Iterate as the system reveals reality.*

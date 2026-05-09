@@ -1,0 +1,32 @@
+---
+description: Recipe for adding a daily idempotent batch pipeline.
+---
+
+# Skill: add a pipeline
+
+1. **Module.** `app/pipelines/<name>.py` exposing
+   `async def run(asof: date, ...) -> int` (returns rows written).
+2. **Idempotency.** Re-running with the same `asof` overwrites — use `UPSERT`
+   on the table's natural key (`(symbol, ts)`, `(symbol, asof)`, etc.).
+3. **Provider.** Take the data source as a Protocol parameter (e.g.
+   `provider: MacroDataProvider`); never construct a connector inside the
+   pipeline.
+4. **Schema.** If a new table is needed: write an alembic migration in
+   `migrations/versions/`. Do not autogenerate — the project's
+   `migrations/env.py` has `target_metadata = None` by design.
+5. **Scheduling.** Wire into the worker's scheduler (`app/main.py`) with a
+   sensible cron (most batches: 30 min after US market close = 20:30 UTC).
+6. **Tests.**
+   - Pure-data test: feed synthetic provider output → assert row count + a
+     few field values.
+   - Idempotency test: run twice with the same `asof` → assert table state
+     is identical.
+7. **Logging.** Emit a structured log line: `{pipeline: "<name>", asof: ...,
+   rows_written: ..., duration_ms: ...}`. Use `services/monitoring/logging.py`.
+
+## Constraints
+
+- No live network calls in tests; gate on `settings.NO_NETWORK`.
+- Pipelines do not call models or scenarios — they only fill tables.
+- Pipelines do not publish to the bus unless they replace a streaming source
+  (and even then, prefer real-time paths).

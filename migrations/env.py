@@ -15,12 +15,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-from app.core.domain.entities.stock import Base
-target_metadata = Base.metadata
+# Autogenerate is intentionally disabled — migrations are written by hand
+# against the new schema (sessions/universe_membership/earnings_calendar/
+# system_state). When SQLAlchemy ORM models are added, point this at
+# their declarative Base.
+target_metadata = None
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

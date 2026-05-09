@@ -1,0 +1,47 @@
+---
+description: How to structure a stub vs. an implementation, and how to mark intent for the next implementer.
+globs: app/**/*.py
+---
+
+# Stub format
+
+The repo is currently stub-complete. When you write a stub:
+
+```python
+async def submit(self, order: Order) -> str:
+    """Submit an order to Alpaca.
+
+    Maps OrderType.{MARKET,LIMIT} to Alpaca's order types. Idempotent on
+    rejected orders (raises BrokerRejected).
+    """
+    raise NotImplementedError
+```
+
+## Rules
+
+1. The signature is the contract. Don't change it without updating callers in
+   the same PR.
+2. The docstring describes WHAT the implementation must do, not HOW. The HOW
+   lives in `STUBS_TODO.md`.
+3. Don't return a fake/empty value to "let things compile" — that hides bugs
+   when the caller forgets to check. Always `raise NotImplementedError`.
+4. For async generator stubs that never yield, write:
+   ```python
+   async def subscribe_bars(self, symbols, timeframe):
+       if False:  # pyright: ignore[unreachable]
+           yield
+       raise NotImplementedError
+   ```
+   This keeps the function recognisable as an async generator.
+5. Unused-parameter and unused-import warnings on stubs are silenced via
+   `pyrightconfig.json` and `__all__` lists in `__init__.py`. Do not add
+   `# type: ignore` to individual stub params.
+
+## When you implement a stub
+
+1. Read `STUBS_TODO.md` for that module's acceptance criteria.
+2. Replace the body. Keep the docstring (it's the contract for callers).
+3. Write a unit test in the mirrored `tests/` path.
+4. Update the module's `__init__.py` `__all__` if you're exposing a new
+   public symbol.
+5. Run `make typecheck && make lint && make test`.
